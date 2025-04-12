@@ -47,7 +47,7 @@ impl Editor {
     fn draw_rows(&mut self, buf: &mut String) -> Result<()> {
         for y in 0..self.config.screen_rows {
             if y == self.config.screen_rows / 3 {
-                let mut welcome = format!("Killo-rs editor -- version {KILO_RS_VERSION}");
+                let mut welcome = format!("Kilo-rs editor -- version {KILO_RS_VERSION}");
                 if welcome.len() > self.config.screen_cols.into() {
                     welcome.truncate(self.config.screen_cols.into());
                 }
