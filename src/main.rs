@@ -4,7 +4,7 @@ use anyhow::Result;
 use crossterm::{
     cursor,
     event::{read, Event, KeyCode, KeyModifiers},
-    execute,
+    execute, style,
     terminal::{
         disable_raw_mode, enable_raw_mode, size, Clear, ClearType, EnterAlternateScreen,
         LeaveAlternateScreen,
@@ -41,8 +41,21 @@ impl Editor {
     }
 
     // Output
+
+    fn draw_rows(&mut self) -> Result<()> {
+        for _ in 0..self.config.screen_rows {
+            self.config.sc.queue(style::Print("~"))?;
+            self.config.sc.queue(cursor::MoveToNextLine(1))?;
+        }
+        Ok(())
+    }
+
     fn refresh_screen(&mut self) -> Result<()> {
         self.config.sc.queue(Clear(ClearType::All))?;
+        self.config.sc.queue(cursor::MoveTo(0, 0))?;
+
+        self.draw_rows()?;
+
         self.config.sc.queue(cursor::MoveTo(0, 0))?;
         self.config.sc.flush()?;
         Ok(())
