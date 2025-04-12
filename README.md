@@ -1,0 +1,1 @@
+A simple text editor rewritten with Rust. based on the [Kilo](https://viewsourcecode.org/snaptoken/kilo/) tutorial.
