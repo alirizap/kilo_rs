@@ -17,21 +17,25 @@ const KILO_RS_VERSION: &'static str = "0.1.1";
 struct EditorConfig {
     screen_rows: u16,
     screen_cols: u16,
-    sc: Stdout,
+    cx: u16,
+    cy: u16,
 }
 
 struct Editor {
-    config: EditorConfig,
+    cg: EditorConfig,
+    sc: Stdout,
 }
 
 impl Editor {
     fn new(screen_rows: u16, screen_cols: u16) -> Self {
         Self {
-            config: EditorConfig {
+            cg: EditorConfig {
                 screen_rows,
                 screen_cols,
-                sc: stdout(),
+                cx: 0,
+                cy: 0,
             },
+            sc: stdout(),
         }
     }
 
@@ -45,13 +49,13 @@ impl Editor {
     // Output
 
     fn draw_rows(&mut self, buf: &mut String) -> Result<()> {
-        for y in 0..self.config.screen_rows {
-            if y == self.config.screen_rows / 3 {
+        for y in 0..self.cg.screen_rows {
+            if y == self.cg.screen_rows / 3 {
                 let mut welcome = format!("Kilo-rs editor -- version {KILO_RS_VERSION}");
-                if welcome.len() > self.config.screen_cols.into() {
-                    welcome.truncate(self.config.screen_cols.into());
+                if welcome.len() > self.cg.screen_cols.into() {
+                    welcome.truncate(self.cg.screen_cols.into());
                 }
-                let mut padding = (self.config.screen_cols as usize - welcome.len()) / 2;
+                let mut padding = (self.cg.screen_cols as usize - welcome.len()) / 2;
                 if padding > 0 {
                     buf.push('~');
                     padding -= 1
@@ -66,7 +70,7 @@ impl Editor {
                 buf.push('~');
             }
 
-            if y < self.config.screen_rows - 1 {
+            if y < self.cg.screen_rows - 1 {
                 buf.push_str("\r\n");
             }
         }
@@ -76,28 +80,70 @@ impl Editor {
     fn refresh_screen(&mut self) -> Result<()> {
         let mut buf = String::new();
 
-        self.config.sc.queue(cursor::Hide)?;
-        self.config.sc.queue(Clear(ClearType::All))?;
-        self.config.sc.queue(cursor::MoveTo(0, 0))?;
+        self.sc.queue(cursor::Hide)?;
+        self.sc.queue(Clear(ClearType::All))?;
+        self.sc.queue(cursor::MoveTo(0, 0))?;
 
         self.draw_rows(&mut buf)?;
 
-        self.config.sc.queue(style::Print(buf))?;
-        self.config.sc.queue(cursor::MoveTo(0, 0))?;
-        self.config.sc.queue(cursor::Show)?;
-        self.config.sc.flush()?;
+        self.sc.queue(style::Print(buf))?;
+        self.sc.queue(cursor::MoveTo(self.cg.cx + 1, self.cg.cy))?;
+        self.sc.queue(cursor::Show)?;
+        self.sc.flush()?;
         Ok(())
     }
 
     // Input
 
+    fn move_cursor(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Left => {
+                if self.cg.cx != 0 {
+                    self.cg.cx -= 1;
+                }
+            }
+            KeyCode::Right => {
+                if self.cg.cx != self.cg.screen_cols - 1 {
+                    self.cg.cx += 1;
+                }
+            }
+            KeyCode::Up => {
+                if self.cg.cy != 0 {
+                    self.cg.cy -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.cg.cy != self.cg.screen_rows {
+                    self.cg.cy += 1;
+                }
+            }
+            _ => todo!("Wait What!?"),
+        }
+    }
+
     fn process_keypress(&mut self) -> Result<()> {
         let event = read()?;
         if let Event::Key(key) = event {
             match key.code {
+                KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
+                    self.move_cursor(key.code)
+                }
+                KeyCode::PageUp | KeyCode::PageDown => {
+                    let mut times = self.cg.screen_rows;
+                    while times != 0 {
+                        self.move_cursor(if key.code == KeyCode::PageUp {
+                            KeyCode::Up
+                        } else {
+                            KeyCode::Down
+                        });
+                        times -= 1;
+                    }
+                }
+                KeyCode::Home => self.cg.cx = 0,
+                KeyCode::End => self.cg.cx = self.cg.screen_cols - 1,
                 KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                     disable_raw_mode().unwrap();
-                    execute!(self.config.sc, LeaveAlternateScreen).unwrap();
+                    execute!(self.sc, LeaveAlternateScreen).unwrap();
                     std::process::exit(0);
                 }
                 _ => {}
