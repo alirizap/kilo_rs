@@ -1,6 +1,9 @@
-use std::io::{stdout, Stdout, Write};
+use std::{
+    fs::File,
+    io::{stdout, BufRead, BufReader, Stdout, Write},
+};
 
-use anyhow::Result;
+use anyhow::{Error, Result};
 use crossterm::{
     cursor,
     event::{read, Event, KeyCode, KeyModifiers},
@@ -19,55 +22,74 @@ struct EditorConfig {
     screen_cols: u16,
     cx: u16,
     cy: u16,
+    row: Vec<String>,
 }
 
 struct Editor {
     cg: EditorConfig,
     sc: Stdout,
+    file: Option<String>,
 }
 
 impl Editor {
-    fn new(screen_rows: u16, screen_cols: u16) -> Self {
+    fn new(screen_rows: u16, screen_cols: u16, filename: Option<String>) -> Self {
         Self {
             cg: EditorConfig {
                 screen_rows,
                 screen_cols,
                 cx: 0,
                 cy: 0,
+                row: Vec::new(),
             },
             sc: stdout(),
+            file: filename,
         }
     }
 
-    fn run(&mut self) -> Result<()> {
+    fn run(&mut self) -> ! {
+        self.open();
         loop {
-            self.refresh_screen()?;
-            self.process_keypress()?;
+            self.refresh_screen().unwrap_or_else(|err| self.die(err));
+            self.process_keypress().unwrap_or_else(|err| self.die(err));
         }
+    }
+
+    fn die(&mut self, err: Error) -> ! {
+        disable_raw_mode().unwrap();
+        execute!(self.sc, LeaveAlternateScreen).unwrap();
+        eprintln!("{err}");
+        std::process::exit(1);
     }
 
     // Output
 
     fn draw_rows(&mut self, buf: &mut String) -> Result<()> {
         for y in 0..self.cg.screen_rows {
-            if y == self.cg.screen_rows / 3 {
-                let mut welcome = format!("Kilo-rs editor -- version {KILO_RS_VERSION}");
-                if welcome.len() > self.cg.screen_cols.into() {
-                    welcome.truncate(self.cg.screen_cols.into());
-                }
-                let mut padding = (self.cg.screen_cols as usize - welcome.len()) / 2;
-                if padding > 0 {
-                    buf.push('~');
-                    padding -= 1
-                }
+            if y as usize >= self.cg.row.len() {
+                if self.cg.row.len() == 0 && y == self.cg.screen_rows / 3 {
+                    let mut welcome = format!("Kilo-rs editor -- version {KILO_RS_VERSION}");
+                    if welcome.len() > self.cg.screen_cols.into() {
+                        welcome.truncate(self.cg.screen_cols.into());
+                    }
+                    let mut padding = (self.cg.screen_cols as usize - welcome.len()) / 2;
+                    if padding > 0 {
+                        buf.push('~');
+                        padding -= 1
+                    }
 
-                while padding != 0 {
-                    buf.push(' ');
-                    padding -= 1;
+                    while padding != 0 {
+                        buf.push(' ');
+                        padding -= 1;
+                    }
+                    buf.push_str(&welcome);
+                } else {
+                    buf.push('~');
                 }
-                buf.push_str(&welcome);
             } else {
-                buf.push('~');
+                if self.cg.row[y as usize].len() > self.cg.screen_cols as usize {
+                    self.cg.row[y as usize].truncate(self.cg.screen_cols as usize);
+                }
+                buf.push_str(&self.cg.row[y as usize]);
             }
 
             if y < self.cg.screen_rows - 1 {
@@ -151,19 +173,25 @@ impl Editor {
         }
         Ok(())
     }
+
+    fn open(&mut self) {
+        if let Some(file) = &self.file {
+            let reader =
+                BufReader::new(File::open(file).unwrap_or_else(|err| self.die(err.into())));
+            for line in reader.lines() {
+                let line = line.unwrap_or_else(|err| self.die(err.into()));
+                self.cg.row.push(line);
+            }
+        }
+    }
 }
 
 fn main() -> Result<()> {
     let (screen_cols, screen_rows) = size()?;
     execute!(stdout(), EnterAlternateScreen)?;
     enable_raw_mode()?;
-    let mut editor = Editor::new(screen_rows, screen_cols);
-    if let Err(e) = editor.run() {
-        eprint!("{e}");
-        disable_raw_mode().unwrap();
-        execute!(stdout(), LeaveAlternateScreen).unwrap();
-        std::process::exit(1);
-    }
+    let filename = std::env::args().nth(1);
 
-    Ok(())
+    let mut editor = Editor::new(screen_rows, screen_cols, filename);
+    editor.run();
 }
