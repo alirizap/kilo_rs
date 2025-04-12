@@ -1,17 +1,21 @@
-use std::io::stdout;
+use std::io::{stdout, Stdout, Write};
 
 use anyhow::Result;
 use crossterm::{
+    cursor,
     event::{read, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{
-        disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen, LeaveAlternateScreen,
+        disable_raw_mode, enable_raw_mode, size, Clear, ClearType, EnterAlternateScreen,
+        LeaveAlternateScreen,
     },
+    QueueableCommand,
 };
 
 struct EditorConfig {
     screen_rows: u16,
     screen_cols: u16,
+    sc: Stdout,
 }
 
 struct Editor {
@@ -24,23 +28,35 @@ impl Editor {
             config: EditorConfig {
                 screen_rows,
                 screen_cols,
+                sc: stdout(),
             },
         }
     }
 
     fn run(&mut self) -> Result<()> {
         loop {
+            self.refresh_screen()?;
             self.process_keypress()?;
         }
     }
 
-    fn process_keypress(&self) -> Result<()> {
+    // Output
+    fn refresh_screen(&mut self) -> Result<()> {
+        self.config.sc.queue(Clear(ClearType::All))?;
+        self.config.sc.queue(cursor::MoveTo(0, 0))?;
+        self.config.sc.flush()?;
+        Ok(())
+    }
+
+    // Input
+
+    fn process_keypress(&mut self) -> Result<()> {
         let event = read()?;
         if let Event::Key(key) = event {
             match key.code {
                 KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                     disable_raw_mode().unwrap();
-                    execute!(stdout(), LeaveAlternateScreen).unwrap();
+                    execute!(self.config.sc, LeaveAlternateScreen).unwrap();
                     std::process::exit(0);
                 }
                 _ => {}
