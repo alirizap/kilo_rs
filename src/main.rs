@@ -55,6 +55,7 @@ impl Editor {
     fn refresh_screen(&mut self) -> Result<()> {
         let mut buf = String::new();
 
+        self.config.sc.queue(cursor::Hide)?;
         self.config.sc.queue(Clear(ClearType::All))?;
         self.config.sc.queue(cursor::MoveTo(0, 0))?;
 
@@ -62,6 +63,7 @@ impl Editor {
 
         self.config.sc.queue(style::Print(buf))?;
         self.config.sc.queue(cursor::MoveTo(0, 0))?;
+        self.config.sc.queue(cursor::Show)?;
         self.config.sc.flush()?;
         Ok(())
     }
