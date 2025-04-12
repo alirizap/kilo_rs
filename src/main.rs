@@ -2,6 +2,7 @@ use std::io::stdout;
 
 use anyhow::Result;
 use crossterm::{
+    event::{read, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{
         disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen, LeaveAlternateScreen,
@@ -28,6 +29,23 @@ impl Editor {
     }
 
     fn run(&mut self) -> Result<()> {
+        loop {
+            self.process_keypress()?;
+        }
+    }
+
+    fn process_keypress(&self) -> Result<()> {
+        let event = read()?;
+        if let Event::Key(key) = event {
+            match key.code {
+                KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
+                    disable_raw_mode().unwrap();
+                    execute!(stdout(), LeaveAlternateScreen).unwrap();
+                    std::process::exit(0);
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 }
@@ -41,6 +59,7 @@ fn main() -> Result<()> {
         eprint!("{e}");
         disable_raw_mode().unwrap();
         execute!(stdout(), LeaveAlternateScreen).unwrap();
+        std::process::exit(1);
     }
 
     Ok(())
