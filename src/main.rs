@@ -12,6 +12,8 @@ use crossterm::{
     QueueableCommand,
 };
 
+const KILO_RS_VERSION: &'static str = "0.1.1";
+
 struct EditorConfig {
     screen_rows: u16,
     screen_cols: u16,
@@ -44,7 +46,26 @@ impl Editor {
 
     fn draw_rows(&mut self, buf: &mut String) -> Result<()> {
         for y in 0..self.config.screen_rows {
-            buf.push('~');
+            if y == self.config.screen_rows / 3 {
+                let mut welcome = format!("Killo-rs editor -- version {KILO_RS_VERSION}");
+                if welcome.len() > self.config.screen_cols.into() {
+                    welcome.truncate(self.config.screen_cols.into());
+                }
+                let mut padding = (self.config.screen_cols as usize - welcome.len()) / 2;
+                if padding > 0 {
+                    buf.push('~');
+                    padding -= 1
+                }
+
+                while padding != 0 {
+                    buf.push(' ');
+                    padding -= 1;
+                }
+                buf.push_str(&welcome);
+            } else {
+                buf.push('~');
+            }
+
             if y < self.config.screen_rows - 1 {
                 buf.push_str("\r\n");
             }
