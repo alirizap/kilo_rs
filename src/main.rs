@@ -42,20 +42,25 @@ impl Editor {
 
     // Output
 
-    fn draw_rows(&mut self) -> Result<()> {
-        for _ in 0..self.config.screen_rows {
-            self.config.sc.queue(style::Print("~"))?;
-            self.config.sc.queue(cursor::MoveToNextLine(1))?;
+    fn draw_rows(&mut self, buf: &mut String) -> Result<()> {
+        for y in 0..self.config.screen_rows {
+            buf.push('~');
+            if y < self.config.screen_rows - 1 {
+                buf.push_str("\r\n");
+            }
         }
         Ok(())
     }
 
     fn refresh_screen(&mut self) -> Result<()> {
+        let mut buf = String::new();
+
         self.config.sc.queue(Clear(ClearType::All))?;
         self.config.sc.queue(cursor::MoveTo(0, 0))?;
 
-        self.draw_rows()?;
+        self.draw_rows(&mut buf)?;
 
+        self.config.sc.queue(style::Print(buf))?;
         self.config.sc.queue(cursor::MoveTo(0, 0))?;
         self.config.sc.flush()?;
         Ok(())
