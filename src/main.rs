@@ -17,6 +17,24 @@ use crossterm::{
 
 const KILO_RS_VERSION: &'static str = "0.1.1";
 
+struct Row {
+    content: String,
+    render: String,
+    rsize: usize,
+}
+
+impl Row {
+    fn update(&mut self) {
+        self.render.clear();
+        let mut idx = 0;
+        for c in self.content.chars() {
+            self.render.push(c);
+            idx += 1;
+        }
+        self.rsize = idx;
+    }
+}
+
 struct EditorConfig {
     screen_rows: usize,
     screen_cols: usize,
@@ -24,7 +42,7 @@ struct EditorConfig {
     cy: usize,
     col_off: usize,
     row_off: usize,
-    row: Vec<String>,
+    row: Vec<Row>,
 }
 
 struct Editor {
@@ -114,16 +132,15 @@ impl Editor {
                     buf.push('~');
                 }
             } else {
-                // truncate a row if its len greater then screen columns
                 let mut len = self.cfg.row[file_row]
-                    .len()
+                    .rsize
                     .saturating_sub(self.cfg.col_off);
                 if len > self.cfg.screen_cols {
                     len = self.cfg.screen_cols;
                 }
 
                 let end = len + self.cfg.col_off;
-                buf.push_str(&self.cfg.row[file_row][self.cfg.col_off..end]);
+                buf.push_str(&self.cfg.row[file_row].render[self.cfg.col_off..end]);
             }
 
             if y < self.cfg.screen_rows - 1 {
@@ -158,9 +175,9 @@ impl Editor {
 
     fn move_cursor(&mut self, key: KeyCode) {
         let row = if self.cfg.cy >= self.cfg.row.len() {
-            ""
+            None
         } else {
-            &self.cfg.row[self.cfg.cy]
+            Some(&self.cfg.row[self.cfg.cy])
         };
 
         match key {
@@ -169,13 +186,13 @@ impl Editor {
                     self.cfg.cx -= 1;
                 } else if self.cfg.cy > 0 {
                     self.cfg.cy -= 1;
-                    self.cfg.cx = self.cfg.row[self.cfg.cy].len();
+                    self.cfg.cx = self.cfg.row[self.cfg.cy].content.len();
                 }
             }
             KeyCode::Right => {
-                if !row.is_empty() && self.cfg.cx < row.len() {
+                if row.is_some_and(|r| r.content.len() > self.cfg.cx) {
                     self.cfg.cx += 1;
-                } else if !row.is_empty() && self.cfg.cx == row.len() {
+                } else if row.is_some_and(|r| r.content.len() == self.cfg.cx) {
                     self.cfg.cy += 1;
                     self.cfg.cx = 0;
                 }
@@ -194,12 +211,12 @@ impl Editor {
         }
 
         let row = if self.cfg.cy >= self.cfg.row.len() {
-            ""
+            None
         } else {
-            &self.cfg.row[self.cfg.cy]
+            Some(&self.cfg.row[self.cfg.cy])
         };
-        if self.cfg.cx > row.len() {
-            self.cfg.cx = row.len();
+        if row.is_some_and(|r| self.cfg.cx > r.content.len()) {
+            self.cfg.cx = row.unwrap().content.len();
         }
     }
 
@@ -247,7 +264,13 @@ impl Editor {
                 BufReader::new(File::open(file).unwrap_or_else(|err| self.die(err.into())));
             for line in reader.lines() {
                 let line = line.unwrap_or_else(|err| self.die(err.into()));
-                self.cfg.row.push(line);
+                let mut row = Row {
+                    content: line,
+                    render: String::new(),
+                    rsize: 0,
+                };
+                row.update();
+                self.cfg.row.push(row);
             }
         }
     }
