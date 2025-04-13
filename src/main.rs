@@ -66,7 +66,7 @@ impl Editor {
     fn new(screen_rows: u16, screen_cols: u16, filename: Option<String>) -> Self {
         Self {
             cfg: EditorConfig {
-                screen_rows: screen_rows as usize,
+                screen_rows: (screen_rows - 1) as usize,
                 screen_cols: screen_cols as usize,
                 cx: 0,
                 cy: 0,
@@ -162,11 +162,39 @@ impl Editor {
                 buf.push_str(&self.cfg.row[file_row].render[self.cfg.col_off..end]);
             }
 
-            if y < self.cfg.screen_rows - 1 {
-                buf.push_str("\r\n");
-            }
+            buf.push_str("\r\n");
         }
         Ok(())
+    }
+
+    fn draw_statusbar(&self, buf: &mut String) {
+        buf.push_str("\x1b[7m");
+        let mut status = format!(
+            "{} - {} lines",
+            if let Some(file) = &self.file {
+                file.clone()
+            } else {
+                "[No Name]".to_string()
+            },
+            self.cfg.row.len()
+        );
+        let rstatus = format!("{}/{}", self.cfg.cy + 1, self.cfg.row.len());
+        let mut len = status.len();
+        if status.len() > self.cfg.screen_cols {
+            len = self.cfg.screen_cols;
+        }
+        let rlen = rstatus.len();
+        status.truncate(len);
+        buf.push_str(&status);
+        while len < self.cfg.screen_cols {
+            if self.cfg.screen_cols - len == rlen {
+                buf.push_str(&rstatus);
+                break;
+            }
+            buf.push(' ');
+            len += 1;
+        }
+        buf.push_str("\x1b[m");
     }
 
     fn refresh_screen(&mut self) -> Result<()> {
@@ -179,6 +207,7 @@ impl Editor {
         self.sc.queue(cursor::MoveTo(0, 0))?;
 
         self.draw_rows(&mut buf)?;
+        self.draw_statusbar(&mut buf);
 
         self.sc.queue(style::Print(buf))?;
         self.sc.queue(cursor::MoveTo(
