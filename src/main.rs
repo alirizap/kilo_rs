@@ -16,6 +16,7 @@ use crossterm::{
 };
 
 const KILO_RS_VERSION: &'static str = "0.1.1";
+const KILO_RS_TAB_STOP: usize = 8;
 
 struct Row {
     content: String,
@@ -28,8 +29,17 @@ impl Row {
         self.render.clear();
         let mut idx = 0;
         for c in self.content.chars() {
-            self.render.push(c);
-            idx += 1;
+            if c == '\t' {
+                self.render.push(' ');
+                idx += 1;
+                while idx % KILO_RS_TAB_STOP != 0 {
+                    self.render.push(' ');
+                    idx += 1;
+                }
+            } else {
+                self.render.push(c);
+                idx += 1;
+            }
         }
         self.rsize = idx;
     }
@@ -40,6 +50,7 @@ struct EditorConfig {
     screen_cols: usize,
     cx: usize,
     cy: usize,
+    rx: usize,
     col_off: usize,
     row_off: usize,
     row: Vec<Row>,
@@ -59,6 +70,7 @@ impl Editor {
                 screen_cols: screen_cols as usize,
                 cx: 0,
                 cy: 0,
+                rx: 0,
                 col_off: 0,
                 row_off: 0,
                 row: Vec::new(),
@@ -94,17 +106,24 @@ impl Editor {
     // Output
 
     fn scroll(&mut self) {
+        self.cfg.rx = if self.cfg.cy < self.cfg.row.len() {
+            let row = &self.cfg.row[self.cfg.cy];
+            self.cx_to_rx(row)
+        } else {
+            0
+        };
+
         if self.cfg.cy < self.cfg.row_off {
             self.cfg.row_off = self.cfg.cy;
         }
         if self.cfg.cy >= self.cfg.row_off + self.cfg.screen_rows {
             self.cfg.row_off = self.cfg.cy - self.cfg.screen_rows + 1;
         }
-        if self.cfg.cx < self.cfg.col_off {
-            self.cfg.col_off = self.cfg.cx;
+        if self.cfg.rx < self.cfg.col_off {
+            self.cfg.col_off = self.cfg.rx;
         }
-        if self.cfg.cx >= self.cfg.col_off + self.cfg.screen_cols {
-            self.cfg.col_off = self.cfg.cx - self.cfg.screen_cols + 1;
+        if self.cfg.rx >= self.cfg.col_off + self.cfg.screen_cols {
+            self.cfg.col_off = self.cfg.rx - self.cfg.screen_cols + 1;
         }
     }
 
@@ -163,12 +182,25 @@ impl Editor {
 
         self.sc.queue(style::Print(buf))?;
         self.sc.queue(cursor::MoveTo(
-            (self.cfg.cx - self.cfg.col_off) as u16,
+            (self.cfg.rx - self.cfg.col_off) as u16,
             (self.cfg.cy - self.cfg.row_off) as u16,
         ))?;
         self.sc.queue(cursor::Show)?;
         self.sc.flush()?;
         Ok(())
+    }
+
+    // Row operations
+
+    fn cx_to_rx(&self, row: &Row) -> usize {
+        let mut rx = 0;
+        for c in row.content.chars().take(self.cfg.cx) {
+            if c == '\t' {
+                rx += (KILO_RS_TAB_STOP - 1) - (rx % KILO_RS_TAB_STOP);
+            }
+            rx += 1;
+        }
+        rx
     }
 
     // Input
