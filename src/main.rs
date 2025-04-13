@@ -18,16 +18,17 @@ use crossterm::{
 const KILO_RS_VERSION: &'static str = "0.1.1";
 
 struct EditorConfig {
-    screen_rows: u16,
-    screen_cols: u16,
-    cx: u16,
-    cy: u16,
+    screen_rows: usize,
+    screen_cols: usize,
+    cx: usize,
+    cy: usize,
+    col_off: usize,
     row_off: usize,
     row: Vec<String>,
 }
 
 struct Editor {
-    cg: EditorConfig,
+    cfg: EditorConfig,
     sc: Stdout,
     file: Option<String>,
 }
@@ -35,11 +36,12 @@ struct Editor {
 impl Editor {
     fn new(screen_rows: u16, screen_cols: u16, filename: Option<String>) -> Self {
         Self {
-            cg: EditorConfig {
-                screen_rows,
-                screen_cols,
+            cfg: EditorConfig {
+                screen_rows: screen_rows as usize,
+                screen_cols: screen_cols as usize,
                 cx: 0,
                 cy: 0,
+                col_off: 0,
                 row_off: 0,
                 row: Vec::new(),
             },
@@ -74,24 +76,30 @@ impl Editor {
     // Output
 
     fn scroll(&mut self) {
-        if self.cg.row_off > self.cg.cy.into() {
-            self.cg.row_off = self.cg.cy.into();
+        if self.cfg.cy < self.cfg.row_off {
+            self.cfg.row_off = self.cfg.cy;
         }
-        if self.cg.row_off + self.cg.screen_rows as usize <= self.cg.cy.into() {
-            self.cg.row_off = (self.cg.cy - self.cg.screen_rows + 1).into();
+        if self.cfg.cy >= self.cfg.row_off + self.cfg.screen_rows {
+            self.cfg.row_off = self.cfg.cy - self.cfg.screen_rows + 1;
+        }
+        if self.cfg.cx < self.cfg.col_off {
+            self.cfg.col_off = self.cfg.cx;
+        }
+        if self.cfg.cx >= self.cfg.col_off + self.cfg.screen_cols {
+            self.cfg.col_off = self.cfg.cx - self.cfg.screen_cols + 1;
         }
     }
 
     fn draw_rows(&mut self, buf: &mut String) -> Result<()> {
-        for y in 0..self.cg.screen_rows {
-            let file_row = y as usize + self.cg.row_off;
-            if file_row >= self.cg.row.len() {
-                if self.cg.row.len() == 0 && y == self.cg.screen_rows / 3 {
+        for y in 0..self.cfg.screen_rows {
+            let file_row = y + self.cfg.row_off;
+            if file_row >= self.cfg.row.len() {
+                if self.cfg.row.len() == 0 && y == self.cfg.screen_rows / 3 {
                     let mut welcome = format!("Kilo-rs editor -- version {KILO_RS_VERSION}");
-                    if welcome.len() > self.cg.screen_cols.into() {
-                        welcome.truncate(self.cg.screen_cols.into());
+                    if welcome.len() > self.cfg.screen_cols.into() {
+                        welcome.truncate(self.cfg.screen_cols.into());
                     }
-                    let mut padding = (self.cg.screen_cols as usize - welcome.len()) / 2;
+                    let mut padding = (self.cfg.screen_cols as usize - welcome.len()) / 2;
                     if padding > 0 {
                         buf.push('~');
                         padding -= 1
@@ -107,13 +115,18 @@ impl Editor {
                 }
             } else {
                 // truncate a row if its len greater then screen columns
-                if self.cg.row[file_row].len() > self.cg.screen_cols as usize {
-                    self.cg.row[file_row].truncate(self.cg.screen_cols as usize);
+                let mut len = self.cfg.row[file_row]
+                    .len()
+                    .saturating_sub(self.cfg.col_off);
+                if len > self.cfg.screen_cols {
+                    len = self.cfg.screen_cols;
                 }
-                buf.push_str(&self.cg.row[file_row]);
+
+                let end = len + self.cfg.col_off;
+                buf.push_str(&self.cfg.row[file_row][self.cfg.col_off..end]);
             }
 
-            if y < self.cg.screen_rows - 1 {
+            if y < self.cfg.screen_rows - 1 {
                 buf.push_str("\r\n");
             }
         }
@@ -133,8 +146,8 @@ impl Editor {
 
         self.sc.queue(style::Print(buf))?;
         self.sc.queue(cursor::MoveTo(
-            self.cg.cx,
-            self.cg.cy - self.cg.row_off as u16,
+            (self.cfg.cx - self.cfg.col_off) as u16,
+            (self.cfg.cy - self.cfg.row_off) as u16,
         ))?;
         self.sc.queue(cursor::Show)?;
         self.sc.flush()?;
@@ -144,25 +157,31 @@ impl Editor {
     // Input
 
     fn move_cursor(&mut self, key: KeyCode) {
+        let row = if self.cfg.cy >= self.cfg.row.len() {
+            ""
+        } else {
+            &self.cfg.row[self.cfg.cy]
+        };
+
         match key {
             KeyCode::Left => {
-                if self.cg.cx != 0 {
-                    self.cg.cx -= 1;
+                if self.cfg.cx != 0 {
+                    self.cfg.cx -= 1;
                 }
             }
             KeyCode::Right => {
-                if self.cg.cx != self.cg.screen_cols - 1 {
-                    self.cg.cx += 1;
+                if !row.is_empty() && self.cfg.cx < row.len() {
+                    self.cfg.cx += 1;
                 }
             }
             KeyCode::Up => {
-                if self.cg.cy != 0 {
-                    self.cg.cy -= 1;
+                if self.cfg.cy != 0 {
+                    self.cfg.cy -= 1;
                 }
             }
             KeyCode::Down => {
-                if self.cg.row.len() > self.cg.cy.into() {
-                    self.cg.cy += 1;
+                if self.cfg.row.len() > self.cfg.cy.into() {
+                    self.cfg.cy += 1;
                 }
             }
             _ => todo!("Wait What!?"),
@@ -177,7 +196,7 @@ impl Editor {
                     self.move_cursor(key.code)
                 }
                 KeyCode::PageUp | KeyCode::PageDown => {
-                    let mut times = self.cg.screen_rows;
+                    let mut times = self.cfg.screen_rows;
                     while times != 0 {
                         self.move_cursor(if key.code == KeyCode::PageUp {
                             KeyCode::Up
@@ -187,8 +206,8 @@ impl Editor {
                         times -= 1;
                     }
                 }
-                KeyCode::Home => self.cg.cx = 0,
-                KeyCode::End => self.cg.cx = self.cg.screen_cols - 1,
+                KeyCode::Home => self.cfg.cx = 0,
+                KeyCode::End => self.cfg.cx = self.cfg.screen_cols - 1,
                 KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                     disable_raw_mode().unwrap();
                     execute!(
@@ -213,7 +232,7 @@ impl Editor {
                 BufReader::new(File::open(file).unwrap_or_else(|err| self.die(err.into())));
             for line in reader.lines() {
                 let line = line.unwrap_or_else(|err| self.die(err.into()));
-                self.cg.row.push(line);
+                self.cfg.row.push(line);
             }
         }
     }
