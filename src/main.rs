@@ -167,11 +167,17 @@ impl Editor {
             KeyCode::Left => {
                 if self.cfg.cx != 0 {
                     self.cfg.cx -= 1;
+                } else if self.cfg.cy > 0 {
+                    self.cfg.cy -= 1;
+                    self.cfg.cx = self.cfg.row[self.cfg.cy].len();
                 }
             }
             KeyCode::Right => {
                 if !row.is_empty() && self.cfg.cx < row.len() {
                     self.cfg.cx += 1;
+                } else if !row.is_empty() && self.cfg.cx == row.len() {
+                    self.cfg.cy += 1;
+                    self.cfg.cx = 0;
                 }
             }
             KeyCode::Up => {
@@ -185,6 +191,15 @@ impl Editor {
                 }
             }
             _ => todo!("Wait What!?"),
+        }
+
+        let row = if self.cfg.cy >= self.cfg.row.len() {
+            ""
+        } else {
+            &self.cfg.row[self.cfg.cy]
+        };
+        if self.cfg.cx > row.len() {
+            self.cfg.cx = row.len();
         }
     }
 
