@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::{stdout, BufRead, BufReader, Stdout, Write},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Error, Result};
@@ -60,13 +61,15 @@ struct Editor {
     cfg: EditorConfig,
     sc: Stdout,
     file: Option<String>,
+    status_msg: String,
+    status_msg_time: u64,
 }
 
 impl Editor {
     fn new(screen_rows: u16, screen_cols: u16, filename: Option<String>) -> Self {
         Self {
             cfg: EditorConfig {
-                screen_rows: (screen_rows - 1) as usize,
+                screen_rows: (screen_rows - 2) as usize,
                 screen_cols: screen_cols as usize,
                 cx: 0,
                 cy: 0,
@@ -77,11 +80,15 @@ impl Editor {
             },
             sc: stdout(),
             file: filename,
+            status_msg: String::new(),
+            status_msg_time: 0,
         }
     }
 
     fn run(&mut self) -> ! {
         self.open();
+        self.set_status_msg("HELP: Ctrl-Q = quit".to_string())
+            .unwrap_or_else(|err| self.die(err));
         self.sc
             .execute(cursor::SetCursorStyle::SteadyBlock)
             .unwrap();
@@ -195,6 +202,21 @@ impl Editor {
             len += 1;
         }
         buf.push_str("\x1b[m");
+        buf.push_str("\r\n");
+    }
+
+    fn draw_messagebar(&self, buf: &mut String) -> Result<()> {
+        buf.push_str("\x1b[K");
+        let msglen = if self.status_msg.len() > self.cfg.screen_cols {
+            self.cfg.screen_cols
+        } else {
+            self.status_msg.len()
+        };
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        if msglen > 0 && (now - self.status_msg_time < 5) {
+            buf.push_str(&self.status_msg[..msglen]);
+        }
+        Ok(())
     }
 
     fn refresh_screen(&mut self) -> Result<()> {
@@ -208,6 +230,8 @@ impl Editor {
 
         self.draw_rows(&mut buf)?;
         self.draw_statusbar(&mut buf);
+        self.draw_messagebar(&mut buf)
+            .unwrap_or_else(|err| self.die(err));
 
         self.sc.queue(style::Print(buf))?;
         self.sc.queue(cursor::MoveTo(
@@ -219,17 +243,10 @@ impl Editor {
         Ok(())
     }
 
-    // Row operations
-
-    fn cx_to_rx(&self, row: &Row) -> usize {
-        let mut rx = 0;
-        for c in row.content.chars().take(self.cfg.cx) {
-            if c == '\t' {
-                rx += (KILO_RS_TAB_STOP - 1) - (rx % KILO_RS_TAB_STOP);
-            }
-            rx += 1;
-        }
-        rx
+    fn set_status_msg(&mut self, msg: String) -> Result<()> {
+        self.status_msg = msg;
+        self.status_msg_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        Ok(())
     }
 
     // Input
@@ -326,6 +343,19 @@ impl Editor {
             }
         }
         Ok(())
+    }
+
+    // Row operations
+
+    fn cx_to_rx(&self, row: &Row) -> usize {
+        let mut rx = 0;
+        for c in row.content.chars().take(self.cfg.cx) {
+            if c == '\t' {
+                rx += (KILO_RS_TAB_STOP - 1) - (rx % KILO_RS_TAB_STOP);
+            }
+            rx += 1;
+        }
+        rx
     }
 
     // File I/O
