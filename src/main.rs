@@ -260,6 +260,15 @@ impl Editor {
                     self.move_cursor(key.code)
                 }
                 KeyCode::PageUp | KeyCode::PageDown => {
+                    if key.code == KeyCode::PageUp {
+                        self.cfg.cy = self.cfg.row_off;
+                    } else {
+                        self.cfg.cy = self.cfg.row_off + self.cfg.screen_rows - 1;
+                        if self.cfg.cy > self.cfg.screen_rows {
+                            self.cfg.cy = self.cfg.row.len();
+                        }
+                    }
+
                     let mut times = self.cfg.screen_rows;
                     while times != 0 {
                         self.move_cursor(if key.code == KeyCode::PageUp {
