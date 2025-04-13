@@ -280,7 +280,9 @@ impl Editor {
                     }
                 }
                 KeyCode::Home => self.cfg.cx = 0,
-                KeyCode::End => self.cfg.cx = self.cfg.screen_cols - 1,
+                KeyCode::End if self.cfg.cy < self.cfg.screen_rows => {
+                    self.cfg.cx = self.cfg.row[self.cfg.cy].content.len()
+                }
                 KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                     disable_raw_mode().unwrap();
                     execute!(
