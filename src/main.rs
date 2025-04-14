@@ -140,9 +140,8 @@ fn editor_insert_char(config: &mut EditorConfig, c: char) {
 // File I/O
 
 fn editor_rows_to_string(rows: &[Row]) -> String {
-    // rows.iter().map(|r| format!("{}\n", &r.content)).collect()
     rows.iter().fold(String::new(), |mut output, r| {
-        let _ = write!(output, "{}", r.content);
+        let _ = write!(output, "{}\n", r.content);
         output
     })
 }
