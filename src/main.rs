@@ -13,7 +13,7 @@ use crossterm::{
         disable_raw_mode, enable_raw_mode, size, Clear, ClearType, EnterAlternateScreen,
         LeaveAlternateScreen,
     },
-    ExecutableCommand, QueueableCommand,
+    QueueableCommand,
 };
 
 const KILO_RS_VERSION: &'static str = "0.1.1";
@@ -25,28 +25,8 @@ struct Row {
     rsize: usize,
 }
 
-impl Row {
-    fn update(&mut self) {
-        self.render.clear();
-        let mut idx = 0;
-        for c in self.content.chars() {
-            if c == '\t' {
-                self.render.push(' ');
-                idx += 1;
-                while idx % KILO_RS_TAB_STOP != 0 {
-                    self.render.push(' ');
-                    idx += 1;
-                }
-            } else {
-                self.render.push(c);
-                idx += 1;
-            }
-        }
-        self.rsize = idx;
-    }
-}
-
 struct EditorConfig {
+    stdout: Stdout,
     screen_rows: usize,
     screen_cols: usize,
     cx: usize,
@@ -55,335 +35,350 @@ struct EditorConfig {
     col_off: usize,
     row_off: usize,
     row: Vec<Row>,
-}
-
-struct Editor {
-    cfg: EditorConfig,
-    sc: Stdout,
-    file: Option<String>,
+    filename: Option<String>,
     status_msg: String,
     status_msg_time: u64,
 }
 
-impl Editor {
-    fn new(screen_rows: u16, screen_cols: u16, filename: Option<String>) -> Self {
-        Self {
-            cfg: EditorConfig {
-                screen_rows: (screen_rows - 2) as usize,
-                screen_cols: screen_cols as usize,
-                cx: 0,
-                cy: 0,
-                rx: 0,
-                col_off: 0,
-                row_off: 0,
-                row: Vec::new(),
-            },
-            sc: stdout(),
-            file: filename,
+impl EditorConfig {
+    fn new() -> Result<Self> {
+        let (screen_cols, screen_rows) = size()?;
+        Ok(EditorConfig {
+            stdout: stdout(),
+            screen_rows: (screen_rows - 2) as usize,
+            screen_cols: screen_cols as usize,
+            cx: 0,
+            cy: 0,
+            rx: 0,
+            col_off: 0,
+            row_off: 0,
+            row: Vec::new(),
+            filename: None,
             status_msg: String::new(),
             status_msg_time: 0,
-        }
-    }
-
-    fn run(&mut self) -> ! {
-        self.open();
-        self.set_status_msg("HELP: Ctrl-Q = quit".to_string())
-            .unwrap_or_else(|err| self.die(err));
-        self.sc
-            .execute(cursor::SetCursorStyle::SteadyBlock)
-            .unwrap();
-        loop {
-            self.refresh_screen().unwrap_or_else(|err| self.die(err));
-            self.process_keypress().unwrap_or_else(|err| self.die(err));
-        }
-    }
-
-    fn die(&mut self, err: Error) -> ! {
-        disable_raw_mode().unwrap();
-        execute!(
-            self.sc,
-            LeaveAlternateScreen,
-            cursor::SetCursorStyle::DefaultUserShape
-        )
-        .unwrap();
-        eprintln!("{err}");
-        std::process::exit(1);
-    }
-
-    // Output
-
-    fn scroll(&mut self) {
-        self.cfg.rx = if self.cfg.cy < self.cfg.row.len() {
-            let row = &self.cfg.row[self.cfg.cy];
-            self.cx_to_rx(row)
-        } else {
-            0
-        };
-
-        if self.cfg.cy < self.cfg.row_off {
-            self.cfg.row_off = self.cfg.cy;
-        }
-        if self.cfg.cy >= self.cfg.row_off + self.cfg.screen_rows {
-            self.cfg.row_off = self.cfg.cy - self.cfg.screen_rows + 1;
-        }
-        if self.cfg.rx < self.cfg.col_off {
-            self.cfg.col_off = self.cfg.rx;
-        }
-        if self.cfg.rx >= self.cfg.col_off + self.cfg.screen_cols {
-            self.cfg.col_off = self.cfg.rx - self.cfg.screen_cols + 1;
-        }
-    }
-
-    fn draw_rows(&mut self, buf: &mut String) -> Result<()> {
-        for y in 0..self.cfg.screen_rows {
-            let file_row = y + self.cfg.row_off;
-            if file_row >= self.cfg.row.len() {
-                if self.cfg.row.len() == 0 && y == self.cfg.screen_rows / 3 {
-                    let mut welcome = format!("Kilo-rs editor -- version {KILO_RS_VERSION}");
-                    if welcome.len() > self.cfg.screen_cols.into() {
-                        welcome.truncate(self.cfg.screen_cols.into());
-                    }
-                    let mut padding = (self.cfg.screen_cols as usize - welcome.len()) / 2;
-                    if padding > 0 {
-                        buf.push('~');
-                        padding -= 1
-                    }
-
-                    while padding != 0 {
-                        buf.push(' ');
-                        padding -= 1;
-                    }
-                    buf.push_str(&welcome);
-                } else {
-                    buf.push('~');
-                }
-            } else {
-                let mut len = self.cfg.row[file_row]
-                    .rsize
-                    .saturating_sub(self.cfg.col_off);
-                if len > self.cfg.screen_cols {
-                    len = self.cfg.screen_cols;
-                }
-
-                let end = len + self.cfg.col_off;
-                buf.push_str(&self.cfg.row[file_row].render[self.cfg.col_off..end]);
-            }
-
-            buf.push_str("\r\n");
-        }
-        Ok(())
-    }
-
-    fn draw_statusbar(&self, buf: &mut String) {
-        buf.push_str("\x1b[7m");
-        let mut status = format!(
-            "{} - {} lines",
-            if let Some(file) = &self.file {
-                file.clone()
-            } else {
-                "[No Name]".to_string()
-            },
-            self.cfg.row.len()
-        );
-        let rstatus = format!("{}/{}", self.cfg.cy + 1, self.cfg.row.len());
-        let mut len = status.len();
-        if status.len() > self.cfg.screen_cols {
-            len = self.cfg.screen_cols;
-        }
-        let rlen = rstatus.len();
-        status.truncate(len);
-        buf.push_str(&status);
-        while len < self.cfg.screen_cols {
-            if self.cfg.screen_cols - len == rlen {
-                buf.push_str(&rstatus);
-                break;
-            }
-            buf.push(' ');
-            len += 1;
-        }
-        buf.push_str("\x1b[m");
-        buf.push_str("\r\n");
-    }
-
-    fn draw_messagebar(&self, buf: &mut String) -> Result<()> {
-        buf.push_str("\x1b[K");
-        let msglen = if self.status_msg.len() > self.cfg.screen_cols {
-            self.cfg.screen_cols
-        } else {
-            self.status_msg.len()
-        };
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        if msglen > 0 && (now - self.status_msg_time < 5) {
-            buf.push_str(&self.status_msg[..msglen]);
-        }
-        Ok(())
-    }
-
-    fn refresh_screen(&mut self) -> Result<()> {
-        self.scroll();
-
-        let mut buf = String::new();
-
-        self.sc.queue(cursor::Hide)?;
-        self.sc.queue(Clear(ClearType::All))?;
-        self.sc.queue(cursor::MoveTo(0, 0))?;
-
-        self.draw_rows(&mut buf)?;
-        self.draw_statusbar(&mut buf);
-        self.draw_messagebar(&mut buf)
-            .unwrap_or_else(|err| self.die(err));
-
-        self.sc.queue(style::Print(buf))?;
-        self.sc.queue(cursor::MoveTo(
-            (self.cfg.rx - self.cfg.col_off) as u16,
-            (self.cfg.cy - self.cfg.row_off) as u16,
-        ))?;
-        self.sc.queue(cursor::Show)?;
-        self.sc.flush()?;
-        Ok(())
-    }
-
-    fn set_status_msg(&mut self, msg: String) -> Result<()> {
-        self.status_msg = msg;
-        self.status_msg_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        Ok(())
-    }
-
-    // Input
-
-    fn move_cursor(&mut self, key: KeyCode) {
-        let row = if self.cfg.cy >= self.cfg.row.len() {
-            None
-        } else {
-            Some(&self.cfg.row[self.cfg.cy])
-        };
-
-        match key {
-            KeyCode::Left => {
-                if self.cfg.cx != 0 {
-                    self.cfg.cx -= 1;
-                } else if self.cfg.cy > 0 {
-                    self.cfg.cy -= 1;
-                    self.cfg.cx = self.cfg.row[self.cfg.cy].content.len();
-                }
-            }
-            KeyCode::Right => {
-                if row.is_some_and(|r| r.content.len() > self.cfg.cx) {
-                    self.cfg.cx += 1;
-                } else if row.is_some_and(|r| r.content.len() == self.cfg.cx) {
-                    self.cfg.cy += 1;
-                    self.cfg.cx = 0;
-                }
-            }
-            KeyCode::Up => {
-                if self.cfg.cy != 0 {
-                    self.cfg.cy -= 1;
-                }
-            }
-            KeyCode::Down => {
-                if self.cfg.row.len() > self.cfg.cy.into() {
-                    self.cfg.cy += 1;
-                }
-            }
-            _ => todo!("Wait What!?"),
-        }
-
-        let row = if self.cfg.cy >= self.cfg.row.len() {
-            None
-        } else {
-            Some(&self.cfg.row[self.cfg.cy])
-        };
-        if row.is_some_and(|r| self.cfg.cx > r.content.len()) {
-            self.cfg.cx = row.unwrap().content.len();
-        }
-    }
-
-    fn process_keypress(&mut self) -> Result<()> {
-        let event = read()?;
-        if let Event::Key(key) = event {
-            match key.code {
-                KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
-                    self.move_cursor(key.code)
-                }
-                KeyCode::PageUp | KeyCode::PageDown => {
-                    if key.code == KeyCode::PageUp {
-                        self.cfg.cy = self.cfg.row_off;
-                    } else {
-                        self.cfg.cy = self.cfg.row_off + self.cfg.screen_rows - 1;
-                        if self.cfg.cy > self.cfg.screen_rows {
-                            self.cfg.cy = self.cfg.row.len();
-                        }
-                    }
-
-                    let mut times = self.cfg.screen_rows;
-                    while times != 0 {
-                        self.move_cursor(if key.code == KeyCode::PageUp {
-                            KeyCode::Up
-                        } else {
-                            KeyCode::Down
-                        });
-                        times -= 1;
-                    }
-                }
-                KeyCode::Home => self.cfg.cx = 0,
-                KeyCode::End if self.cfg.cy < self.cfg.screen_rows => {
-                    self.cfg.cx = self.cfg.row[self.cfg.cy].content.len()
-                }
-                KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
-                    disable_raw_mode().unwrap();
-                    execute!(
-                        self.sc,
-                        LeaveAlternateScreen,
-                        cursor::SetCursorStyle::DefaultUserShape
-                    )
-                    .unwrap();
-                    std::process::exit(0);
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    // Row operations
-
-    fn cx_to_rx(&self, row: &Row) -> usize {
-        let mut rx = 0;
-        for c in row.content.chars().take(self.cfg.cx) {
-            if c == '\t' {
-                rx += (KILO_RS_TAB_STOP - 1) - (rx % KILO_RS_TAB_STOP);
-            }
-            rx += 1;
-        }
-        rx
-    }
-
-    // File I/O
-
-    fn open(&mut self) {
-        if let Some(file) = &self.file {
-            let reader =
-                BufReader::new(File::open(file).unwrap_or_else(|err| self.die(err.into())));
-            for line in reader.lines() {
-                let line = line.unwrap_or_else(|err| self.die(err.into()));
-                let mut row = Row {
-                    content: line,
-                    render: String::new(),
-                    rsize: 0,
-                };
-                row.update();
-                self.cfg.row.push(row);
-            }
-        }
+        })
     }
 }
 
+// Terminal
+
+fn die(err: Error) -> ! {
+    disable_raw_mode().unwrap();
+    execute!(
+        stdout(),
+        LeaveAlternateScreen,
+        cursor::SetCursorStyle::DefaultUserShape
+    )
+    .unwrap();
+    eprintln!("{err}");
+    std::process::exit(1);
+}
+
+// Row operations
+
+fn editor_row_cx_to_rx(row: &Row, cx: usize) -> usize {
+    let mut rx = 0;
+    for c in row.content.chars().take(cx) {
+        if c == '\t' {
+            rx += (KILO_RS_TAB_STOP - 1) - (rx % KILO_RS_TAB_STOP);
+        }
+        rx += 1;
+    }
+    rx
+}
+
+fn editor_update_row(row: &mut Row) {
+    row.render.clear();
+    let mut idx = 0;
+    for c in row.content.chars() {
+        if c == '\t' {
+            row.render.push(' ');
+            idx += 1;
+            while idx % KILO_RS_TAB_STOP != 0 {
+                row.render.push(' ');
+                idx += 1;
+            }
+        } else {
+            row.render.push(c);
+            idx += 1;
+        }
+    }
+    row.rsize = idx;
+}
+
+fn editor_append_row(config: &mut EditorConfig, s: &str) {
+    let mut row = Row {
+        content: s.to_string(),
+        render: String::new(),
+        rsize: 0,
+    };
+    editor_update_row(&mut row);
+    config.row.push(row);
+}
+
+// File I/O
+
+fn editor_open(config: &mut EditorConfig, filename: String) {
+    config.filename = Some(filename.to_string());
+    let reader = BufReader::new(File::open(filename).unwrap_or_else(|err| die(err.into())));
+    for line in reader.lines() {
+        let line = line.unwrap_or_else(|err| die(err.into()));
+        editor_append_row(config, &line);
+    }
+}
+
+// Output
+
+fn editor_scroll(config: &mut EditorConfig) {
+    config.rx = if config.cy < config.row.len() {
+        let row = &config.row[config.cy];
+        editor_row_cx_to_rx(row, config.cx)
+    } else {
+        0
+    };
+
+    if config.cy < config.row_off {
+        config.row_off = config.cy;
+    }
+    if config.cy >= config.row_off + config.screen_rows {
+        config.row_off = config.cy - config.screen_rows + 1;
+    }
+    if config.rx < config.col_off {
+        config.col_off = config.rx;
+    }
+    if config.rx >= config.col_off + config.screen_cols {
+        config.col_off = config.rx - config.screen_cols + 1;
+    }
+}
+
+fn editor_draw_rows(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
+    for y in 0..config.screen_rows {
+        let file_row = y + config.row_off;
+        if file_row >= config.row.len() {
+            if config.row.len() == 0 && y == config.screen_rows / 3 {
+                let mut welcome = format!("Kilo-rs editor -- version {KILO_RS_VERSION}");
+                if welcome.len() > config.screen_cols {
+                    welcome.truncate(config.screen_cols);
+                }
+                let mut padding = (config.screen_cols - welcome.len()) / 2;
+                if padding > 0 {
+                    buf.push('~');
+                    padding -= 1
+                }
+
+                while padding != 0 {
+                    buf.push(' ');
+                    padding -= 1;
+                }
+                buf.push_str(&welcome);
+            } else {
+                buf.push('~');
+            }
+        } else {
+            let mut len = config.row[file_row].rsize.saturating_sub(config.col_off);
+            if len > config.screen_cols {
+                len = config.screen_cols;
+            }
+
+            let end = len + config.col_off;
+            buf.push_str(&config.row[file_row].render[config.col_off..end]);
+        }
+
+        buf.push_str("\r\n");
+    }
+    Ok(())
+}
+
+fn editor_draw_statusbar(config: &EditorConfig, buf: &mut String) {
+    buf.push_str("\x1b[7m");
+    let mut status = format!(
+        "{} - {} lines",
+        if let Some(file) = &config.filename {
+            file.clone()
+        } else {
+            "[No Name]".to_string()
+        },
+        config.row.len()
+    );
+    let rstatus = format!("{}/{}", config.cy + 1, config.row.len());
+    let mut len = status.len();
+    if status.len() > config.screen_cols {
+        len = config.screen_cols;
+    }
+    let rlen = rstatus.len();
+    status.truncate(len);
+    buf.push_str(&status);
+    while len < config.screen_cols {
+        if config.screen_cols - len == rlen {
+            buf.push_str(&rstatus);
+            break;
+        }
+        buf.push(' ');
+        len += 1;
+    }
+    buf.push_str("\x1b[m");
+    buf.push_str("\r\n");
+}
+
+fn editor_draw_messagebar(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
+    buf.push_str("\x1b[K");
+    let msglen = if config.status_msg.len() > config.screen_cols {
+        config.screen_cols
+    } else {
+        config.status_msg.len()
+    };
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    if msglen > 0 && (now - config.status_msg_time < 5) {
+        buf.push_str(&config.status_msg[..msglen]);
+    }
+    Ok(())
+}
+
+fn editor_refresh_screen(config: &mut EditorConfig) -> Result<()> {
+    editor_scroll(config);
+
+    let mut buf = String::new();
+
+    config.stdout.queue(cursor::Hide)?;
+    config.stdout.queue(Clear(ClearType::All))?;
+    config.stdout.queue(cursor::MoveTo(0, 0))?;
+
+    editor_draw_rows(config, &mut buf)?;
+    editor_draw_statusbar(config, &mut buf);
+    editor_draw_messagebar(config, &mut buf)?;
+
+    config.stdout.queue(style::Print(buf))?;
+    config.stdout.queue(cursor::MoveTo(
+        (config.rx - config.col_off) as u16,
+        (config.cy - config.row_off) as u16,
+    ))?;
+    config.stdout.queue(cursor::Show)?;
+    config.stdout.flush()?;
+    Ok(())
+}
+
+fn editor_set_status_msg(config: &mut EditorConfig, msg: String) -> Result<()> {
+    config.status_msg = msg;
+    config.status_msg_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    Ok(())
+}
+
+// Input
+
+fn editor_move_cursor(config: &mut EditorConfig, key: KeyCode) {
+    let row = if config.cy >= config.row.len() {
+        None
+    } else {
+        Some(&config.row[config.cy])
+    };
+    match key {
+        KeyCode::Left => {
+            if config.cx != 0 {
+                config.cx -= 1;
+            } else if config.cy > 0 {
+                config.cy -= 1;
+                config.cx = config.row[config.cy].content.len();
+            }
+        }
+        KeyCode::Right => {
+            if row.is_some_and(|r| r.content.len() > config.cx) {
+                config.cx += 1;
+            } else if row.is_some_and(|r| r.content.len() == config.cx) {
+                config.cy += 1;
+                config.cx = 0;
+            }
+        }
+        KeyCode::Up => {
+            if config.cy != 0 {
+                config.cy -= 1;
+            }
+        }
+        KeyCode::Down => {
+            if config.row.len() > config.cy.into() {
+                config.cy += 1;
+            }
+        }
+        _ => todo!("Wait What!?"),
+    }
+
+    let row = if config.cy >= config.row.len() {
+        None
+    } else {
+        Some(&config.row[config.cy])
+    };
+    if row.is_some_and(|r| config.cx > r.content.len()) {
+        config.cx = row.unwrap().content.len();
+    }
+}
+
+fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
+    let event = read()?;
+    if let Event::Key(key) = event {
+        match key.code {
+            KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
+                editor_move_cursor(config, key.code)
+            }
+            KeyCode::PageUp | KeyCode::PageDown => {
+                if key.code == KeyCode::PageUp {
+                    config.cy = config.row_off;
+                } else {
+                    config.cy = config.row_off + config.screen_rows - 1;
+                    if config.cy > config.row.len() {
+                        config.cy = config.row.len();
+                    }
+                }
+
+                let mut times = config.screen_rows;
+                while times != 0 {
+                    editor_move_cursor(
+                        config,
+                        if key.code == KeyCode::PageUp {
+                            KeyCode::Up
+                        } else {
+                            KeyCode::Down
+                        },
+                    );
+                    times -= 1;
+                }
+            }
+            KeyCode::Home => config.cx = 0,
+            KeyCode::End if config.cy < config.row.len() => {
+                config.cx = config.row[config.cy].content.len()
+            }
+            KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
+                disable_raw_mode().unwrap();
+                execute!(
+                    config.stdout,
+                    LeaveAlternateScreen,
+                    cursor::SetCursorStyle::DefaultUserShape
+                )
+                .unwrap();
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+// Main
+
 fn main() -> Result<()> {
-    let (screen_cols, screen_rows) = size()?;
-    execute!(stdout(), EnterAlternateScreen)?;
+    let mut config = EditorConfig::new()?;
+    execute!(
+        stdout(),
+        EnterAlternateScreen,
+        cursor::SetCursorStyle::SteadyBlock
+    )?;
     enable_raw_mode()?;
     let filename = std::env::args().nth(1);
-
-    let mut editor = Editor::new(screen_rows, screen_cols, filename);
-    editor.run();
+    if let Some(filename) = filename {
+        editor_open(&mut config, filename);
+    }
+    editor_set_status_msg(&mut config, "HELP: Ctrl-Q = quit".to_string())
+        .unwrap_or_else(|err| die(err));
+    loop {
+        editor_refresh_screen(&mut config).unwrap_or_else(|err| die(err));
+        editor_process_keypress(&mut config).unwrap_or_else(|err| die(err));
+    }
 }
