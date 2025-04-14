@@ -116,6 +116,26 @@ fn editor_append_row(config: &mut EditorConfig, s: &str) {
     config.row.push(row);
 }
 
+fn editor_row_insert_char(row: &mut Row, at: usize, c: char) {
+    let at = if at > row.content.len() {
+        row.content.len()
+    } else {
+        at
+    };
+    row.content.insert(at, c);
+    editor_update_row(row);
+}
+
+// editor operations
+
+fn editor_insert_char(config: &mut EditorConfig, c: char) {
+    if config.cy == config.row.len() {
+        editor_append_row(config, "");
+    }
+    editor_row_insert_char(&mut config.row[config.cy], config.cx, c);
+    config.cx += 1;
+}
+
 // File I/O
 
 fn editor_open(config: &mut EditorConfig, filename: String) {
@@ -355,6 +375,7 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
                 .unwrap();
                 std::process::exit(0);
             }
+            KeyCode::Char(c) => editor_insert_char(config, c),
             _ => {}
         }
     }
