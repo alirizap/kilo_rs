@@ -1,6 +1,7 @@
 use std::{
-    fs::File,
-    io::{stdout, BufRead, BufReader, Stdout, Write},
+    fmt::Write,
+    fs::{File, OpenOptions},
+    io::{stdout, BufRead, BufReader, Stdout, Write as _},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -16,7 +17,7 @@ use crossterm::{
     QueueableCommand,
 };
 
-const KILO_RS_VERSION: &'static str = "0.1.1";
+const KILO_RS_VERSION: &str = "0.1.1";
 const KILO_RS_TAB_STOP: usize = 8;
 
 struct Row {
@@ -138,12 +139,34 @@ fn editor_insert_char(config: &mut EditorConfig, c: char) {
 
 // File I/O
 
+fn editor_rows_to_string(rows: &[Row]) -> String {
+    // rows.iter().map(|r| format!("{}\n", &r.content)).collect()
+    rows.iter().fold(String::new(), |mut output, r| {
+        let _ = write!(output, "{}", r.content);
+        output
+    })
+}
+
 fn editor_open(config: &mut EditorConfig, filename: String) {
     config.filename = Some(filename.to_string());
     let reader = BufReader::new(File::open(filename).unwrap_or_else(|err| die(err.into())));
     for line in reader.lines() {
         let line = line.unwrap_or_else(|err| die(err.into()));
         editor_append_row(config, &line);
+    }
+}
+
+fn editor_save(config: &EditorConfig) {
+    if let Some(filename) = &config.filename {
+        let buf = editor_rows_to_string(&config.row);
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(filename)
+            .unwrap_or_else(|err| die(err.into()));
+        write!(file, "{}", buf).unwrap_or_else(|err| die(err.into()));
     }
 }
 
@@ -175,7 +198,7 @@ fn editor_draw_rows(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
     for y in 0..config.screen_rows {
         let file_row = y + config.row_off;
         if file_row >= config.row.len() {
-            if config.row.len() == 0 && y == config.screen_rows / 3 {
+            if config.row.is_empty() && y == config.screen_rows / 3 {
                 let mut welcome = format!("Kilo-rs editor -- version {KILO_RS_VERSION}");
                 if welcome.len() > config.screen_cols {
                     welcome.truncate(config.screen_cols);
@@ -314,7 +337,7 @@ fn editor_move_cursor(config: &mut EditorConfig, key: KeyCode) {
             }
         }
         KeyCode::Down => {
-            if config.row.len() > config.cy.into() {
+            if config.row.len() > config.cy {
                 config.cy += 1;
             }
         }
@@ -375,6 +398,7 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
                 .unwrap();
                 std::process::exit(0);
             }
+            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => editor_save(config),
             KeyCode::Char(c) => editor_insert_char(config, c),
             _ => {}
         }
