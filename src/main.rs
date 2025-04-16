@@ -81,7 +81,7 @@ fn die(err: Error) -> ! {
 
 // Row operations
 
-fn editor_row_cx_to_rx(row: &Row, cx: usize) -> usize {
+fn row_cx_to_rx(row: &Row, cx: usize) -> usize {
     let mut rx = 0;
     for c in row.content.chars().take(cx) {
         if c == '\t' {
@@ -92,7 +92,23 @@ fn editor_row_cx_to_rx(row: &Row, cx: usize) -> usize {
     rx
 }
 
-fn editor_update_row(row: &mut Row) {
+fn row_rx_to_cx(row: &Row, rx: usize) -> usize {
+    let mut cur_rx = 0;
+    let mut ret_cx = 0;
+    for (cx, c) in row.content.chars().enumerate() {
+        if c == '\t' {
+            cur_rx += (KILO_RS_TAB_STOP - 1) - (cur_rx % KILO_RS_TAB_STOP);
+        }
+        ret_cx = cx;
+        cur_rx += 1;
+        if cur_rx > rx {
+            return cx;
+        }
+    }
+    ret_cx
+}
+
+fn update_row(row: &mut Row) {
     row.render.clear();
     let mut idx = 0;
     for c in row.content.chars() {
@@ -111,7 +127,7 @@ fn editor_update_row(row: &mut Row) {
     row.rsize = idx;
 }
 
-fn editor_insert_row(config: &mut EditorConfig, at: usize, s: &str) {
+fn insert_row(config: &mut EditorConfig, at: usize, s: &str) {
     if at > config.row.len() {
         return;
     }
@@ -121,12 +137,12 @@ fn editor_insert_row(config: &mut EditorConfig, at: usize, s: &str) {
         rsize: 0,
     };
     config.row.insert(at, row);
-    editor_update_row(&mut config.row[at]);
+    update_row(&mut config.row[at]);
     // config.row.push(row);
     config.dirty = true;
 }
 
-fn editor_del_row(config: &mut EditorConfig, at: usize) {
+fn del_row(config: &mut EditorConfig, at: usize) {
     if at >= config.row.len() {
         return;
     }
@@ -134,55 +150,55 @@ fn editor_del_row(config: &mut EditorConfig, at: usize) {
     config.dirty = true;
 }
 
-fn editor_row_insert_char(row: &mut Row, at: usize, c: char) {
+fn row_insert_char(row: &mut Row, at: usize, c: char) {
     let at = if at > row.content.len() {
         row.content.len()
     } else {
         at
     };
     row.content.insert(at, c);
-    editor_update_row(row);
+    update_row(row);
 }
 
-fn editor_row_append_string(row: &mut Row, s: &str) {
+fn row_append_string(row: &mut Row, s: &str) {
     row.content.push_str(s);
-    editor_update_row(row);
+    update_row(row);
 }
 
-fn editor_row_del_char(row: &mut Row, at: usize) {
+fn row_del_char(row: &mut Row, at: usize) {
     if at >= row.content.len() {
         return;
     }
     row.content.remove(at);
-    editor_update_row(row);
+    update_row(row);
 }
 
 // editor operations
 
-fn editor_insert_char(config: &mut EditorConfig, c: char) {
+fn insert_char(config: &mut EditorConfig, c: char) {
     if config.cy == config.row.len() {
-        editor_insert_row(config, config.row.len(), "");
+        insert_row(config, config.row.len(), "");
     }
-    editor_row_insert_char(&mut config.row[config.cy], config.cx, c);
+    row_insert_char(&mut config.row[config.cy], config.cx, c);
     config.cx += 1;
     config.dirty = true;
 }
 
-fn editor_insert_newline(config: &mut EditorConfig) {
+fn insert_newline(config: &mut EditorConfig) {
     if config.cx == 0 {
-        editor_insert_row(config, config.cy, "");
+        insert_row(config, config.cy, "");
     } else {
         let content = config.row[config.cy].content.clone();
-        editor_insert_row(config, config.cy + 1, &content[config.cx..]);
+        insert_row(config, config.cy + 1, &content[config.cx..]);
         config.row[config.cy].content.truncate(config.cx);
-        editor_update_row(&mut config.row[config.cy]);
+        update_row(&mut config.row[config.cy]);
     }
     config.cy += 1;
     config.cx = 0;
     config.dirty = true;
 }
 
-fn editor_del_char(config: &mut EditorConfig) {
+fn del_char(config: &mut EditorConfig) {
     if config.cy == config.row.len() {
         return;
     }
@@ -193,14 +209,14 @@ fn editor_del_char(config: &mut EditorConfig) {
 
     if config.cx > 0 {
         let row = &mut config.row[config.cy];
-        editor_row_del_char(row, config.cx - 1);
+        row_del_char(row, config.cx - 1);
         config.cx -= 1;
         config.dirty = true;
     } else {
         config.cx = config.row[config.cy - 1].content.len();
         let content = config.row[config.cy].content.clone();
-        editor_row_append_string(&mut config.row[config.cy - 1], &content);
-        editor_del_row(config, config.cy);
+        row_append_string(&mut config.row[config.cy - 1], &content);
+        del_row(config, config.cy);
         config.cy -= 1;
         config.dirty = true;
     }
@@ -208,42 +224,42 @@ fn editor_del_char(config: &mut EditorConfig) {
 
 // File I/O
 
-fn editor_rows_to_string(rows: &[Row]) -> String {
+fn rows_to_string(rows: &[Row]) -> String {
     rows.iter().fold(String::new(), |mut output, r| {
         let _ = writeln!(output, "{}", r.content);
         output
     })
 }
 
-fn editor_open(config: &mut EditorConfig, filename: String) {
+fn open(config: &mut EditorConfig, filename: String) {
     config.filename = Some(filename.to_string());
     let reader = BufReader::new(File::open(filename).unwrap_or_else(|err| die(err.into())));
     for line in reader.lines() {
         let line = line.unwrap_or_else(|err| die(err.into()));
-        editor_insert_row(config, config.row.len(), &line);
+        insert_row(config, config.row.len(), &line);
     }
     config.dirty = false;
 }
 
-fn editor_save(config: &mut EditorConfig) -> Result<()> {
+fn save(config: &mut EditorConfig) -> Result<()> {
     let filename;
     match &config.filename {
         Some(name) => {
             filename = name.clone();
         }
         None => {
-            let f = editor_prompt(config, "Save as (ESC to cancel):")?;
+            let f = prompt(config, "Save as (ESC to cancel):")?;
             if let Some(f) = f {
                 config.filename = Some(f.clone());
                 filename = f;
             } else {
-                return editor_set_status_msg(config, "Save aborted".to_string());
+                return set_status_msg(config, "Save aborted".to_string());
             }
         }
     }
 
     config.filename = Some(filename.clone());
-    let buf = editor_rows_to_string(&config.row);
+    let buf = rows_to_string(&config.row);
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -253,21 +269,42 @@ fn editor_save(config: &mut EditorConfig) -> Result<()> {
         .unwrap_or_else(|err| die(err.into()));
     match file.write(buf.as_bytes()) {
         Ok(bytes) => {
-            editor_set_status_msg(config, format!("{} bytes writen to disk", bytes))?;
+            set_status_msg(config, format!("{} bytes writen to disk", bytes))?;
             config.dirty = false;
         }
-        Err(e) => editor_set_status_msg(config, format!("Can't save! I/O error: {}", e))?,
+        Err(e) => set_status_msg(config, format!("Can't save! I/O error: {}", e))?,
     };
+
+    Ok(())
+}
+
+// Find
+fn find(config: &mut EditorConfig) -> Result<()> {
+    let query = prompt(config, "Search (ESC to Cancel):")?;
+    let query = if let Some(query) = query {
+        query
+    } else {
+        return Ok(());
+    };
+
+    for (i, row) in config.row.iter().enumerate() {
+        if let Some(offset) = row.render.find(&query) {
+            config.cy = i;
+            config.cx = row_rx_to_cx(row, offset);
+            config.row_off = config.row.len();
+            break;
+        }
+    }
 
     Ok(())
 }
 
 // Output
 
-fn editor_scroll(config: &mut EditorConfig) {
+fn scroll(config: &mut EditorConfig) {
     config.rx = if config.cy < config.row.len() {
         let row = &config.row[config.cy];
-        editor_row_cx_to_rx(row, config.cx)
+        row_cx_to_rx(row, config.cx)
     } else {
         0
     };
@@ -286,7 +323,7 @@ fn editor_scroll(config: &mut EditorConfig) {
     }
 }
 
-fn editor_draw_rows(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
+fn draw_rows(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
     for y in 0..config.screen_rows {
         let file_row = y + config.row_off;
         if file_row >= config.row.len() {
@@ -324,7 +361,7 @@ fn editor_draw_rows(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
     Ok(())
 }
 
-fn editor_draw_statusbar(config: &EditorConfig, buf: &mut String) {
+fn draw_statusbar(config: &EditorConfig, buf: &mut String) {
     buf.push_str("\x1b[7m");
     let mut status = format!(
         "{} - {} lines {}",
@@ -356,7 +393,7 @@ fn editor_draw_statusbar(config: &EditorConfig, buf: &mut String) {
     buf.push_str("\r\n");
 }
 
-fn editor_draw_messagebar(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
+fn draw_messagebar(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
     buf.push_str("\x1b[K");
     let msglen = if config.status_msg.len() > config.screen_cols {
         config.screen_cols
@@ -370,8 +407,8 @@ fn editor_draw_messagebar(config: &mut EditorConfig, buf: &mut String) -> Result
     Ok(())
 }
 
-fn editor_refresh_screen(config: &mut EditorConfig) -> Result<()> {
-    editor_scroll(config);
+fn refresh_screen(config: &mut EditorConfig) -> Result<()> {
+    scroll(config);
 
     let mut buf = String::new();
 
@@ -379,9 +416,9 @@ fn editor_refresh_screen(config: &mut EditorConfig) -> Result<()> {
     config.stdout.queue(Clear(ClearType::All))?;
     config.stdout.queue(cursor::MoveTo(0, 0))?;
 
-    editor_draw_rows(config, &mut buf)?;
-    editor_draw_statusbar(config, &mut buf);
-    editor_draw_messagebar(config, &mut buf)?;
+    draw_rows(config, &mut buf)?;
+    draw_statusbar(config, &mut buf);
+    draw_messagebar(config, &mut buf)?;
 
     config.stdout.queue(style::Print(buf))?;
     config.stdout.queue(cursor::MoveTo(
@@ -393,7 +430,7 @@ fn editor_refresh_screen(config: &mut EditorConfig) -> Result<()> {
     Ok(())
 }
 
-fn editor_set_status_msg(config: &mut EditorConfig, msg: String) -> Result<()> {
+fn set_status_msg(config: &mut EditorConfig, msg: String) -> Result<()> {
     config.status_msg = msg;
     config.status_msg_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     Ok(())
@@ -401,23 +438,23 @@ fn editor_set_status_msg(config: &mut EditorConfig, msg: String) -> Result<()> {
 
 // Input
 
-fn editor_prompt(config: &mut EditorConfig, prompt: &str) -> Result<Option<String>> {
+fn prompt(config: &mut EditorConfig, p: &str) -> Result<Option<String>> {
     let mut buf = String::new();
 
     loop {
-        editor_set_status_msg(config, format!("{} {}", prompt, buf))?;
-        editor_refresh_screen(config)?;
+        set_status_msg(config, format!("{} {}", p, buf))?;
+        refresh_screen(config)?;
         if let Event::Key(key) = read()? {
             match key.code {
                 KeyCode::Backspace => {
                     buf.pop();
                 }
                 KeyCode::Esc => {
-                    editor_set_status_msg(config, String::new())?;
-                    return  Ok(None);
+                    set_status_msg(config, String::new())?;
+                    return Ok(None);
                 }
                 KeyCode::Enter => {
-                    editor_set_status_msg(config, String::new())?;
+                    set_status_msg(config, String::new())?;
                     return Ok(Some(buf));
                 }
                 KeyCode::Char(c) if !c.is_control() => buf.push(c),
@@ -427,7 +464,7 @@ fn editor_prompt(config: &mut EditorConfig, prompt: &str) -> Result<Option<Strin
     }
 }
 
-fn editor_move_cursor(config: &mut EditorConfig, key: KeyCode) {
+fn move_cursor(config: &mut EditorConfig, key: KeyCode) {
     let row = if config.cy >= config.row.len() {
         None
     } else {
@@ -473,13 +510,13 @@ fn editor_move_cursor(config: &mut EditorConfig, key: KeyCode) {
     }
 }
 
-fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
+fn process_keypress(config: &mut EditorConfig) -> Result<()> {
     static QUIT_TIMES: AtomicU8 = AtomicU8::new(KILO_RS_QUIT_TIMES);
     let event = read()?;
     if let Event::Key(key) = event {
         match key.code {
             KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
-                editor_move_cursor(config, key.code)
+                move_cursor(config, key.code)
             }
             KeyCode::PageUp | KeyCode::PageDown => {
                 if key.code == KeyCode::PageUp {
@@ -493,7 +530,7 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
 
                 let mut times = config.screen_rows;
                 while times != 0 {
-                    editor_move_cursor(
+                    move_cursor(
                         config,
                         if key.code == KeyCode::PageUp {
                             KeyCode::Up
@@ -504,16 +541,16 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
                     times -= 1;
                 }
             }
-            KeyCode::Enter => editor_insert_newline(config),
+            KeyCode::Enter => insert_newline(config),
             KeyCode::Home => config.cx = 0,
             KeyCode::End if config.cy < config.row.len() => {
                 config.cx = config.row[config.cy].content.len()
             }
-            KeyCode::Backspace => editor_del_char(config),
+            KeyCode::Backspace => del_char(config),
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 let q = QUIT_TIMES.load(Ordering::Relaxed);
                 if config.dirty && q > 0 {
-                    editor_set_status_msg(
+                    set_status_msg(
                         config,
                         format!(
                             "WARNING!! File has unsaved changes. \
@@ -533,8 +570,9 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
                 .unwrap();
                 std::process::exit(0);
             }
-            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => editor_save(config)?,
-            KeyCode::Char(c) => editor_insert_char(config, c),
+            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => save(config)?,
+            KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => find(config)?,
+            KeyCode::Char(c) => insert_char(config, c),
             _ => {}
         }
     }
@@ -554,15 +592,15 @@ fn main() -> Result<()> {
     enable_raw_mode()?;
     let filename = std::env::args().nth(1);
     if let Some(filename) = filename {
-        editor_open(&mut config, filename);
+        open(&mut config, filename);
     }
-    editor_set_status_msg(
+    set_status_msg(
         &mut config,
-        "HELP: Ctrl-S = save | Ctrl-Q = quit".to_string(),
+        "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find".to_string(),
     )
     .unwrap_or_else(|err| die(err));
     loop {
-        editor_refresh_screen(&mut config).unwrap_or_else(|err| die(err));
-        editor_process_keypress(&mut config).unwrap_or_else(|err| die(err));
+        refresh_screen(&mut config).unwrap_or_else(|err| die(err));
+        process_keypress(&mut config).unwrap_or_else(|err| die(err));
     }
 }
