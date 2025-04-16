@@ -155,7 +155,7 @@ fn editor_open(config: &mut EditorConfig, filename: String) {
     }
 }
 
-fn editor_save(config: &EditorConfig) {
+fn editor_save(config: &mut EditorConfig) -> Result<()> {
     if let Some(filename) = &config.filename {
         let buf = editor_rows_to_string(&config.row);
         let mut file = OpenOptions::new()
@@ -165,8 +165,12 @@ fn editor_save(config: &EditorConfig) {
             .truncate(true)
             .open(filename)
             .unwrap_or_else(|err| die(err.into()));
-        write!(file, "{}", buf).unwrap_or_else(|err| die(err.into()));
+        match file.write(buf.as_bytes()) {
+            Ok(bytes) => editor_set_status_msg(config, format!("{} bytes writen to disk", bytes))?,
+            Err(e) => editor_set_status_msg(config, format!("Can't save! I/O error: {}", e))?,
+        };
     }
+    Ok(())
 }
 
 // Output
@@ -397,7 +401,7 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
                 .unwrap();
                 std::process::exit(0);
             }
-            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => editor_save(config),
+            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => editor_save(config)?,
             KeyCode::Char(c) => editor_insert_char(config, c),
             _ => {}
         }
@@ -419,8 +423,11 @@ fn main() -> Result<()> {
     if let Some(filename) = filename {
         editor_open(&mut config, filename);
     }
-    editor_set_status_msg(&mut config, "HELP: Ctrl-Q = quit".to_string())
-        .unwrap_or_else(|err| die(err));
+    editor_set_status_msg(
+        &mut config,
+        "HELP: Ctrl-S = save | Ctrl-Q = quit".to_string(),
+    )
+    .unwrap_or_else(|err| die(err));
     loop {
         editor_refresh_screen(&mut config).unwrap_or_else(|err| die(err));
         editor_process_keypress(&mut config).unwrap_or_else(|err| die(err));
