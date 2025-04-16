@@ -210,7 +210,7 @@ fn editor_del_char(config: &mut EditorConfig) {
 
 fn editor_rows_to_string(rows: &[Row]) -> String {
     rows.iter().fold(String::new(), |mut output, r| {
-        let _ = write!(output, "{}\n", r.content);
+        let _ = writeln!(output, "{}", r.content);
         output
     })
 }
@@ -233,11 +233,11 @@ fn editor_save(config: &mut EditorConfig) -> Result<()> {
         }
         None => {
             let f = editor_prompt(config, "Save as (ESC to cancel):")?;
-            if !f.is_empty() {
+            if let Some(f) = f {
                 config.filename = Some(f.clone());
                 filename = f;
             } else {
-                return editor_set_status_msg(config, format!("Save aborted"));
+                return editor_set_status_msg(config, "Save aborted".to_string());
             }
         }
     }
@@ -401,7 +401,7 @@ fn editor_set_status_msg(config: &mut EditorConfig, msg: String) -> Result<()> {
 
 // Input
 
-fn editor_prompt(config: &mut EditorConfig, prompt: &str) -> Result<String> {
+fn editor_prompt(config: &mut EditorConfig, prompt: &str) -> Result<Option<String>> {
     let mut buf = String::new();
 
     loop {
@@ -413,13 +413,12 @@ fn editor_prompt(config: &mut EditorConfig, prompt: &str) -> Result<String> {
                     buf.pop();
                 }
                 KeyCode::Esc => {
-                    editor_set_status_msg(config, format!(""))?;
-                    buf.clear();
-                    return Ok(buf);
+                    editor_set_status_msg(config, String::new())?;
+                    return  Ok(None);
                 }
                 KeyCode::Enter => {
-                    editor_set_status_msg(config, format!(""))?;
-                    return Ok(buf);
+                    editor_set_status_msg(config, String::new())?;
+                    return Ok(Some(buf));
                 }
                 KeyCode::Char(c) if !c.is_control() => buf.push(c),
                 _ => {}
