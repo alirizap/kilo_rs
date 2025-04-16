@@ -226,23 +226,39 @@ fn editor_open(config: &mut EditorConfig, filename: String) {
 }
 
 fn editor_save(config: &mut EditorConfig) -> Result<()> {
-    if let Some(filename) = &config.filename {
-        let buf = editor_rows_to_string(&config.row);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(filename)
-            .unwrap_or_else(|err| die(err.into()));
-        match file.write(buf.as_bytes()) {
-            Ok(bytes) => {
-                editor_set_status_msg(config, format!("{} bytes writen to disk", bytes))?;
-                config.dirty = false;
+    let filename;
+    match &config.filename {
+        Some(name) => {
+            filename = name.clone();
+        }
+        None => {
+            let f = editor_prompt(config, "Save as (ESC to cancel):")?;
+            if !f.is_empty() {
+                config.filename = Some(f.clone());
+                filename = f;
+            } else {
+                return editor_set_status_msg(config, format!("Save aborted"));
             }
-            Err(e) => editor_set_status_msg(config, format!("Can't save! I/O error: {}", e))?,
-        };
+        }
     }
+
+    config.filename = Some(filename.clone());
+    let buf = editor_rows_to_string(&config.row);
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(filename)
+        .unwrap_or_else(|err| die(err.into()));
+    match file.write(buf.as_bytes()) {
+        Ok(bytes) => {
+            editor_set_status_msg(config, format!("{} bytes writen to disk", bytes))?;
+            config.dirty = false;
+        }
+        Err(e) => editor_set_status_msg(config, format!("Can't save! I/O error: {}", e))?,
+    };
+
     Ok(())
 }
 
@@ -384,6 +400,33 @@ fn editor_set_status_msg(config: &mut EditorConfig, msg: String) -> Result<()> {
 }
 
 // Input
+
+fn editor_prompt(config: &mut EditorConfig, prompt: &str) -> Result<String> {
+    let mut buf = String::new();
+
+    loop {
+        editor_set_status_msg(config, format!("{} {}", prompt, buf))?;
+        editor_refresh_screen(config)?;
+        if let Event::Key(key) = read()? {
+            match key.code {
+                KeyCode::Backspace => {
+                    buf.pop();
+                }
+                KeyCode::Esc => {
+                    editor_set_status_msg(config, format!(""))?;
+                    buf.clear();
+                    return Ok(buf);
+                }
+                KeyCode::Enter => {
+                    editor_set_status_msg(config, format!(""))?;
+                    return Ok(buf);
+                }
+                KeyCode::Char(c) if !c.is_control() => buf.push(c),
+                _ => {}
+            }
+        }
+    }
+}
 
 fn editor_move_cursor(config: &mut EditorConfig, key: KeyCode) {
     let row = if config.cy >= config.row.len() {
