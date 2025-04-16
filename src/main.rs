@@ -39,6 +39,7 @@ struct EditorConfig {
     filename: Option<String>,
     status_msg: String,
     status_msg_time: u64,
+    dirty: bool,
 }
 
 impl EditorConfig {
@@ -57,6 +58,7 @@ impl EditorConfig {
             filename: None,
             status_msg: String::new(),
             status_msg_time: 0,
+            dirty: false,
         })
     }
 }
@@ -115,6 +117,7 @@ fn editor_append_row(config: &mut EditorConfig, s: &str) {
     };
     editor_update_row(&mut row);
     config.row.push(row);
+    config.dirty = true;
 }
 
 fn editor_row_insert_char(row: &mut Row, at: usize, c: char) {
@@ -135,6 +138,7 @@ fn editor_insert_char(config: &mut EditorConfig, c: char) {
     }
     editor_row_insert_char(&mut config.row[config.cy], config.cx, c);
     config.cx += 1;
+    config.dirty = true;
 }
 
 // File I/O
@@ -153,6 +157,7 @@ fn editor_open(config: &mut EditorConfig, filename: String) {
         let line = line.unwrap_or_else(|err| die(err.into()));
         editor_append_row(config, &line);
     }
+    config.dirty = false;
 }
 
 fn editor_save(config: &mut EditorConfig) -> Result<()> {
@@ -166,7 +171,10 @@ fn editor_save(config: &mut EditorConfig) -> Result<()> {
             .open(filename)
             .unwrap_or_else(|err| die(err.into()));
         match file.write(buf.as_bytes()) {
-            Ok(bytes) => editor_set_status_msg(config, format!("{} bytes writen to disk", bytes))?,
+            Ok(bytes) => {
+                editor_set_status_msg(config, format!("{} bytes writen to disk", bytes))?;
+                config.dirty = false;
+            }
             Err(e) => editor_set_status_msg(config, format!("Can't save! I/O error: {}", e))?,
         };
     }
@@ -238,13 +246,14 @@ fn editor_draw_rows(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
 fn editor_draw_statusbar(config: &EditorConfig, buf: &mut String) {
     buf.push_str("\x1b[7m");
     let mut status = format!(
-        "{} - {} lines",
+        "{} - {} lines {}",
         if let Some(file) = &config.filename {
-            file.clone()
+            file.as_str()
         } else {
-            "[No Name]".to_string()
+            "[No Name]"
         },
-        config.row.len()
+        config.row.len(),
+        if config.dirty { "(modified)" } else { "" }
     );
     let rstatus = format!("{}/{}", config.cy + 1, config.row.len());
     let mut len = status.len();
