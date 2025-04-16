@@ -2,6 +2,7 @@ use std::{
     fmt::Write,
     fs::{File, OpenOptions},
     io::{stdout, BufRead, BufReader, Stdout, Write as _},
+    sync::atomic::{AtomicU8, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -19,6 +20,7 @@ use crossterm::{
 
 const KILO_RS_VERSION: &str = "0.1.1";
 const KILO_RS_TAB_STOP: usize = 8;
+const KILO_RS_QUIT_TIMES: u8 = 3;
 
 struct Row {
     content: String,
@@ -367,6 +369,7 @@ fn editor_move_cursor(config: &mut EditorConfig, key: KeyCode) {
 }
 
 fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
+    static QUIT_TIMES: AtomicU8 = AtomicU8::new(KILO_RS_QUIT_TIMES);
     let event = read()?;
     if let Event::Key(key) = event {
         match key.code {
@@ -401,6 +404,19 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
                 config.cx = config.row[config.cy].content.len()
             }
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
+                let q = QUIT_TIMES.load(Ordering::Relaxed);
+                if config.dirty && q > 0 {
+                    editor_set_status_msg(
+                        config,
+                        format!(
+                            "WARNING!! File has unsaved changes. \
+                    Press Ctrl-Q {} more times to quit.",
+                            q
+                        ),
+                    )?;
+                    QUIT_TIMES.fetch_sub(1, Ordering::Relaxed);
+                    return Ok(());
+                }
                 disable_raw_mode().unwrap();
                 execute!(
                     config.stdout,
@@ -415,6 +431,7 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
             _ => {}
         }
     }
+    QUIT_TIMES.store(KILO_RS_QUIT_TIMES, Ordering::Relaxed);
     Ok(())
 }
 
