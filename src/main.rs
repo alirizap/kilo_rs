@@ -111,14 +111,18 @@ fn editor_update_row(row: &mut Row) {
     row.rsize = idx;
 }
 
-fn editor_append_row(config: &mut EditorConfig, s: &str) {
-    let mut row = Row {
+fn editor_insert_row(config: &mut EditorConfig, at: usize, s: &str) {
+    if at > config.row.len() {
+        return;
+    }
+    let row = Row {
         content: s.to_string(),
         render: String::new(),
         rsize: 0,
     };
-    editor_update_row(&mut row);
-    config.row.push(row);
+    config.row.insert(at, row);
+    editor_update_row(&mut config.row[at]);
+    // config.row.push(row);
     config.dirty = true;
 }
 
@@ -157,10 +161,24 @@ fn editor_row_del_char(row: &mut Row, at: usize) {
 
 fn editor_insert_char(config: &mut EditorConfig, c: char) {
     if config.cy == config.row.len() {
-        editor_append_row(config, "");
+        editor_insert_row(config, config.row.len(), "");
     }
     editor_row_insert_char(&mut config.row[config.cy], config.cx, c);
     config.cx += 1;
+    config.dirty = true;
+}
+
+fn editor_insert_newline(config: &mut EditorConfig) {
+    if config.cx == 0 {
+        editor_insert_row(config, config.cy, "");
+    } else {
+        let content = config.row[config.cy].content.clone();
+        editor_insert_row(config, config.cy + 1, &content[config.cx..]);
+        config.row[config.cy].content.truncate(config.cx);
+        editor_update_row(&mut config.row[config.cy]);
+    }
+    config.cy += 1;
+    config.cx = 0;
     config.dirty = true;
 }
 
@@ -202,7 +220,7 @@ fn editor_open(config: &mut EditorConfig, filename: String) {
     let reader = BufReader::new(File::open(filename).unwrap_or_else(|err| die(err.into())));
     for line in reader.lines() {
         let line = line.unwrap_or_else(|err| die(err.into()));
-        editor_append_row(config, &line);
+        editor_insert_row(config, config.row.len(), &line);
     }
     config.dirty = false;
 }
@@ -444,6 +462,7 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
                     times -= 1;
                 }
             }
+            KeyCode::Enter => editor_insert_newline(config),
             KeyCode::Home => config.cx = 0,
             KeyCode::End if config.cy < config.row.len() => {
                 config.cx = config.row[config.cy].content.len()
