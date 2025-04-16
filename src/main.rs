@@ -132,6 +132,14 @@ fn editor_row_insert_char(row: &mut Row, at: usize, c: char) {
     editor_update_row(row);
 }
 
+fn editor_row_del_char(row: &mut Row, at: usize) {
+    if at >= row.content.len() {
+        return;
+    }
+    row.content.remove(at);
+    editor_update_row(row);
+}
+
 // editor operations
 
 fn editor_insert_char(config: &mut EditorConfig, c: char) {
@@ -141,6 +149,17 @@ fn editor_insert_char(config: &mut EditorConfig, c: char) {
     editor_row_insert_char(&mut config.row[config.cy], config.cx, c);
     config.cx += 1;
     config.dirty = true;
+}
+
+fn editor_del_char(config: &mut EditorConfig) {
+    if config.cy == config.row.len() {
+        return;
+    }
+    let row = &mut config.row[config.cy];
+    if config.cx > 0 {
+        editor_row_del_char(row, config.cx - 1);
+        config.cx -= 1;
+    }
 }
 
 // File I/O
@@ -403,6 +422,7 @@ fn editor_process_keypress(config: &mut EditorConfig) -> Result<()> {
             KeyCode::End if config.cy < config.row.len() => {
                 config.cx = config.row[config.cy].content.len()
             }
+            KeyCode::Backspace => editor_del_char(config),
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 let q = QUIT_TIMES.load(Ordering::Relaxed);
                 if config.dirty && q > 0 {
