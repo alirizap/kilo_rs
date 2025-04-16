@@ -122,6 +122,14 @@ fn editor_append_row(config: &mut EditorConfig, s: &str) {
     config.dirty = true;
 }
 
+fn editor_del_row(config: &mut EditorConfig, at: usize) {
+    if at >= config.row.len() {
+        return;
+    }
+    config.row.remove(at);
+    config.dirty = true;
+}
+
 fn editor_row_insert_char(row: &mut Row, at: usize, c: char) {
     let at = if at > row.content.len() {
         row.content.len()
@@ -129,6 +137,11 @@ fn editor_row_insert_char(row: &mut Row, at: usize, c: char) {
         at
     };
     row.content.insert(at, c);
+    editor_update_row(row);
+}
+
+fn editor_row_append_string(row: &mut Row, s: &str) {
+    row.content.push_str(s);
     editor_update_row(row);
 }
 
@@ -155,10 +168,23 @@ fn editor_del_char(config: &mut EditorConfig) {
     if config.cy == config.row.len() {
         return;
     }
-    let row = &mut config.row[config.cy];
+
+    if config.cx == 0 && config.cy == 0 {
+        return;
+    }
+
     if config.cx > 0 {
+        let row = &mut config.row[config.cy];
         editor_row_del_char(row, config.cx - 1);
         config.cx -= 1;
+        config.dirty = true;
+    } else {
+        config.cx = config.row[config.cy - 1].content.len();
+        let content = config.row[config.cy].content.clone();
+        editor_row_append_string(&mut config.row[config.cy - 1], &content);
+        editor_del_row(config, config.cy);
+        config.cy -= 1;
+        config.dirty = true;
     }
 }
 
