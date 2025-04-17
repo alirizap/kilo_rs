@@ -298,11 +298,22 @@ fn find_callback(config: &mut EditorConfig, query: &str, code: KeyCode) {
 }
 
 fn find(config: &mut EditorConfig) -> Result<()> {
-    prompt(
+    let saved_cx = config.cx;
+    let saved_cy = config.cy;
+    let saved_col_off = config.col_off;
+    let saved_row_off = config.row_off;
+
+    let query = prompt(
         config,
         "Search (ESC to Cancel):",
         Some(Box::new(find_callback)),
     )?;
+    if query.is_none() {
+        config.cx = saved_cx;
+        config.cy = saved_cy;
+        config.col_off = saved_col_off;
+        config.row_off = saved_row_off;
+    }
     Ok(())
 }
 
