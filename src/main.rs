@@ -24,10 +24,26 @@ const KILO_RS_QUIT_TIMES: u8 = 3;
 
 type Callback = Box<dyn Fn(&mut EditorConfig, &str, KeyCode)>;
 
+#[derive(Clone, Copy, PartialEq)]
+enum Highlight {
+    Normal,
+    Number,
+}
+
+impl Highlight {
+    fn to_color(self) -> u8 {
+        match self {
+            Self::Number => 31,
+            _ => 37,
+        }
+    }
+}
+
 struct Row {
     content: String,
     render: String,
     rsize: usize,
+    hl: Vec<Highlight>,
 }
 
 struct EditorConfig {
@@ -81,6 +97,18 @@ fn die(err: Error) -> ! {
     std::process::exit(1);
 }
 
+// Syntax highlighting
+
+fn update_syntax(row: &mut Row) {
+    row.hl.resize(row.rsize, Highlight::Normal);
+
+    for (i, c) in row.render.chars().enumerate() {
+        if c.is_ascii_digit() {
+            row.hl[i] = Highlight::Number;
+        }
+    }
+}
+
 // Row operations
 
 fn row_cx_to_rx(row: &Row, cx: usize) -> usize {
@@ -127,6 +155,7 @@ fn update_row(row: &mut Row) {
         }
     }
     row.rsize = idx;
+    update_syntax(row);
 }
 
 fn insert_row(config: &mut EditorConfig, at: usize, s: &str) {
@@ -137,6 +166,7 @@ fn insert_row(config: &mut EditorConfig, at: usize, s: &str) {
         content: s.to_string(),
         render: String::new(),
         rsize: 0,
+        hl: Vec::new(),
     };
     config.row.insert(at, row);
     update_row(&mut config.row[at]);
@@ -400,15 +430,27 @@ fn draw_rows(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
 
             let end = len + config.col_off;
             let s = config.row[file_row].render[config.col_off..end].to_string();
-            for ch in s.chars().into_iter() {
-                if ch.is_ascii_digit() {
-                    buf.push_str("\x1b[31m");
+            let hl = &mut config.row[file_row].hl[config.col_off..end];
+            let mut current_color: u8 = 0;
+
+            for (j, ch) in s.chars().into_iter().enumerate() {
+                if hl[j] == Highlight::Normal {
+                    if current_color != 0 {
+                        buf.push_str("\x1b[39m");
+                        current_color = 0;
+                    }
                     buf.push(ch);
-                    buf.push_str("\x1b[39m");
                 } else {
+                    let color = hl[j].to_color();
+                    if color != current_color {
+                        current_color = color;
+                        let tmp = format!("\x1b[{}m", color);
+                        buf.push_str(&tmp);
+                    }
                     buf.push(ch);
                 }
             }
+            buf.push_str("\x1b[39m");
         }
 
         buf.push_str("\r\n");
