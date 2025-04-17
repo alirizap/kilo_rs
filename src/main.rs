@@ -22,6 +22,8 @@ const KILO_RS_VERSION: &str = "0.1.1";
 const KILO_RS_TAB_STOP: usize = 8;
 const KILO_RS_QUIT_TIMES: u8 = 3;
 
+type Callback = Box<dyn Fn(&mut EditorConfig, &str, KeyCode)>;
+
 struct Row {
     content: String,
     render: String,
@@ -248,7 +250,7 @@ fn save(config: &mut EditorConfig) -> Result<()> {
             filename = name.clone();
         }
         None => {
-            let f = prompt(config, "Save as (ESC to cancel):")?;
+            let f = prompt(config, "Save as (ESC to cancel):", None)?;
             if let Some(f) = f {
                 config.filename = Some(f.clone());
                 filename = f;
@@ -279,13 +281,11 @@ fn save(config: &mut EditorConfig) -> Result<()> {
 }
 
 // Find
-fn find(config: &mut EditorConfig) -> Result<()> {
-    let query = prompt(config, "Search (ESC to Cancel):")?;
-    let query = if let Some(query) = query {
-        query
-    } else {
-        return Ok(());
-    };
+
+fn find_callback(config: &mut EditorConfig, query: &str, code: KeyCode) {
+    if code == KeyCode::Enter {
+        return;
+    }
 
     for (i, row) in config.row.iter().enumerate() {
         if let Some(offset) = row.render.find(&query) {
@@ -295,7 +295,14 @@ fn find(config: &mut EditorConfig) -> Result<()> {
             break;
         }
     }
+}
 
+fn find(config: &mut EditorConfig) -> Result<()> {
+    prompt(
+        config,
+        "Search (ESC to Cancel):",
+        Some(Box::new(find_callback)),
+    )?;
     Ok(())
 }
 
@@ -438,27 +445,43 @@ fn set_status_msg(config: &mut EditorConfig, msg: String) -> Result<()> {
 
 // Input
 
-fn prompt(config: &mut EditorConfig, p: &str) -> Result<Option<String>> {
+fn prompt(
+    config: &mut EditorConfig,
+    p: &str,
+    callback: Option<Callback>,
+) -> Result<Option<String>> {
     let mut buf = String::new();
 
     loop {
         set_status_msg(config, format!("{} {}", p, buf))?;
         refresh_screen(config)?;
-        if let Event::Key(key) = read()? {
+        let event = read()?;
+        if let Event::Key(key) = event {
             match key.code {
                 KeyCode::Backspace => {
                     buf.pop();
                 }
                 KeyCode::Esc => {
                     set_status_msg(config, String::new())?;
+                    if let Some(callback) = callback.as_ref() {
+                        callback(config, &buf, key.code);
+                    }
                     return Ok(None);
                 }
                 KeyCode::Enter => {
-                    set_status_msg(config, String::new())?;
-                    return Ok(Some(buf));
+                    if !buf.is_empty() {
+                        set_status_msg(config, String::new())?;
+                        if let Some(callback) = callback.as_ref() {
+                            callback(config, &buf, key.code);
+                        }
+                        return Ok(Some(buf));
+                    }
                 }
                 KeyCode::Char(c) if !c.is_control() => buf.push(c),
                 _ => {}
+            }
+            if let Some(callback) = callback.as_ref() {
+                callback(config, &buf, key.code);
             }
         }
     }
