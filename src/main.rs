@@ -2,7 +2,7 @@ use std::{
     fmt::Write,
     fs::{File, OpenOptions},
     io::{stdout, BufRead, BufReader, Stdout, Write as _},
-    sync::atomic::{AtomicU8, Ordering},
+    sync::atomic::{AtomicI8, AtomicIsize, AtomicU8, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -283,13 +283,41 @@ fn save(config: &mut EditorConfig) -> Result<()> {
 // Find
 
 fn find_callback(config: &mut EditorConfig, query: &str, code: KeyCode) {
+    static LAST_MATCH: AtomicIsize = AtomicIsize::new(-1);
+    static DIRECTION: AtomicI8 = AtomicI8::new(1);
+
     if code == KeyCode::Enter {
+        LAST_MATCH.store(-1, Ordering::Relaxed);
+        DIRECTION.store(1, Ordering::Relaxed);
         return;
+    } else if code == KeyCode::Right || code == KeyCode::Down {
+        DIRECTION.store(1, Ordering::Relaxed);
+    } else if code == KeyCode::Left || code == KeyCode::Up {
+        DIRECTION.store(-1, Ordering::Relaxed);
+    } else {
+        LAST_MATCH.store(-1, Ordering::Relaxed);
+        DIRECTION.store(1, Ordering::Relaxed);
     }
 
-    for (i, row) in config.row.iter().enumerate() {
+    let lm = LAST_MATCH.load(Ordering::Relaxed);
+    if lm == -1 {
+        DIRECTION.store(1, Ordering::Relaxed);
+    }
+    let mut current = lm;
+
+    for _ in config.row.iter() {
+        // maybe crash for large files
+        current += DIRECTION.load(Ordering::Relaxed) as isize;
+        if current == -1 {
+            current = (config.row.len() - 1) as isize;
+        } else if current == config.row.len() as isize {
+            current = 0;
+        }
+
+        let row = &config.row[current as usize];
         if let Some(offset) = row.render.find(&query) {
-            config.cy = i;
+            LAST_MATCH.store(current, Ordering::Relaxed);
+            config.cy = current as usize;
             config.cx = row_rx_to_cx(row, offset);
             config.row_off = config.row.len();
             break;
@@ -305,7 +333,7 @@ fn find(config: &mut EditorConfig) -> Result<()> {
 
     let query = prompt(
         config,
-        "Search (ESC to Cancel):",
+        "Search (Use ESC/Arrows/Enter):",
         Some(Box::new(find_callback)),
     )?;
     if query.is_none() {
