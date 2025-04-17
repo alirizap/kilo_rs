@@ -399,7 +399,16 @@ fn draw_rows(config: &mut EditorConfig, buf: &mut String) -> Result<()> {
             }
 
             let end = len + config.col_off;
-            buf.push_str(&config.row[file_row].render[config.col_off..end]);
+            let s = config.row[file_row].render[config.col_off..end].to_string();
+            for ch in s.chars().into_iter() {
+                if ch.is_ascii_digit() {
+                    buf.push_str("\x1b[31m");
+                    buf.push(ch);
+                    buf.push_str("\x1b[39m");
+                } else {
+                    buf.push(ch);
+                }
+            }
         }
 
         buf.push_str("\r\n");
