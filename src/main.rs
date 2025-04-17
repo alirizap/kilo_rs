@@ -2,7 +2,6 @@ use std::{
     fmt::Write,
     fs::{File, OpenOptions},
     io::{stdout, BufRead, BufReader, Stdout, Write as _},
-    sync::atomic::{AtomicI8, AtomicIsize, AtomicU8, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -99,13 +98,34 @@ fn die(err: Error) -> ! {
 
 // Syntax highlighting
 
+fn is_separator(c: char) -> bool {
+    c.is_ascii_punctuation() || c.is_ascii_whitespace() || c == '\0'
+}
+
 fn update_syntax(row: &mut Row) {
     row.hl.resize(row.rsize, Highlight::Normal);
 
-    for (i, c) in row.render.chars().enumerate() {
-        if c.is_ascii_digit() {
+    let mut prev_sep = true;
+    let mut i = 0;
+    while i < row.rsize {
+        let c = row.render.chars().nth(i).unwrap();
+        let prev_hl = if i > 0 {
+            row.hl[i - 1]
+        } else {
+            Highlight::Normal
+        };
+
+        if (c.is_ascii_digit() && (prev_sep || prev_hl == Highlight::Number))
+            || (c == '.' && prev_hl == Highlight::Number)
+        {
             row.hl[i] = Highlight::Number;
+            i += 1;
+            prev_sep = false;
+            continue;
         }
+
+        prev_sep = is_separator(c);
+        i += 1;
     }
 }
 
@@ -313,43 +333,52 @@ fn save(config: &mut EditorConfig) -> Result<()> {
 // Find
 
 fn find_callback(config: &mut EditorConfig, query: &str, code: KeyCode) {
-    static LAST_MATCH: AtomicIsize = AtomicIsize::new(-1);
-    static DIRECTION: AtomicI8 = AtomicI8::new(1);
+    static mut LAST_MATCH: isize = -1;
+    static mut DIRECTION: i8 = 1;
 
     if code == KeyCode::Enter {
-        LAST_MATCH.store(-1, Ordering::Relaxed);
-        DIRECTION.store(1, Ordering::Relaxed);
+        unsafe {
+            LAST_MATCH = -1;
+            DIRECTION = 1;
+        }
         return;
     } else if code == KeyCode::Right || code == KeyCode::Down {
-        DIRECTION.store(1, Ordering::Relaxed);
+        unsafe {
+            DIRECTION = 1;
+        }
     } else if code == KeyCode::Left || code == KeyCode::Up {
-        DIRECTION.store(-1, Ordering::Relaxed);
+        unsafe {
+            DIRECTION = -1;
+        }
     } else {
-        LAST_MATCH.store(-1, Ordering::Relaxed);
-        DIRECTION.store(1, Ordering::Relaxed);
+        unsafe {
+            LAST_MATCH = -1;
+            DIRECTION = 1;
+        }
     }
 
-    let lm = LAST_MATCH.load(Ordering::Relaxed);
-    if lm == -1 {
-        DIRECTION.store(1, Ordering::Relaxed);
-    }
-    let mut current = lm;
+    let mut current = unsafe {
+        if LAST_MATCH == -1 {
+            DIRECTION = 1;
+        }
+        LAST_MATCH
+    };
 
-    for _ in config.row.iter() {
-        // maybe crash for large files
-        current += DIRECTION.load(Ordering::Relaxed) as isize;
+    let row_len = config.row.len();
+    for _ in 0..row_len {
+        current += unsafe { DIRECTION as isize };
         if current == -1 {
-            current = (config.row.len() - 1) as isize;
-        } else if current == config.row.len() as isize {
+            current = (row_len - 1) as isize;
+        } else if current == row_len as isize {
             current = 0;
         }
 
-        let row = &config.row[current as usize];
-        if let Some(offset) = row.render.find(&query) {
-            LAST_MATCH.store(current, Ordering::Relaxed);
+        let row = &mut config.row[current as usize];
+        if let Some(pos) = row.render.find(&query) {
+            unsafe { LAST_MATCH = current }
             config.cy = current as usize;
-            config.cx = row_rx_to_cx(row, offset);
-            config.row_off = config.row.len();
+            config.cx = row_rx_to_cx(row, pos);
+            config.row_off = row_len;
             break;
         }
     }
@@ -570,7 +599,9 @@ fn prompt(
                 KeyCode::Char(c) if !c.is_control() => buf.push(c),
                 _ => {}
             }
-            if let Some(callback) = callback.as_ref() {
+        }
+        if let Some(callback) = callback.as_ref() {
+            if let Event::Key(key) = event {
                 callback(config, &buf, key.code);
             }
         }
@@ -624,7 +655,7 @@ fn move_cursor(config: &mut EditorConfig, key: KeyCode) {
 }
 
 fn process_keypress(config: &mut EditorConfig) -> Result<()> {
-    static QUIT_TIMES: AtomicU8 = AtomicU8::new(KILO_RS_QUIT_TIMES);
+    static mut QUIT_TIMES: u8 = KILO_RS_QUIT_TIMES;
     let event = read()?;
     if let Event::Key(key) = event {
         match key.code {
@@ -661,7 +692,7 @@ fn process_keypress(config: &mut EditorConfig) -> Result<()> {
             }
             KeyCode::Backspace => del_char(config),
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
-                let q = QUIT_TIMES.load(Ordering::Relaxed);
+                let q = unsafe { QUIT_TIMES };
                 if config.dirty && q > 0 {
                     set_status_msg(
                         config,
@@ -671,7 +702,9 @@ fn process_keypress(config: &mut EditorConfig) -> Result<()> {
                             q
                         ),
                     )?;
-                    QUIT_TIMES.fetch_sub(1, Ordering::Relaxed);
+                    unsafe {
+                        QUIT_TIMES -= 1;
+                    }
                     return Ok(());
                 }
                 disable_raw_mode().unwrap();
@@ -689,7 +722,9 @@ fn process_keypress(config: &mut EditorConfig) -> Result<()> {
             _ => {}
         }
     }
-    QUIT_TIMES.store(KILO_RS_QUIT_TIMES, Ordering::Relaxed);
+    unsafe {
+        QUIT_TIMES = KILO_RS_QUIT_TIMES;
+    }
     Ok(())
 }
 
