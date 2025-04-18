@@ -31,6 +31,7 @@ enum Highlight {
     Normal,
     Number,
     String,
+    Comment,
 }
 
 impl Highlight {
@@ -38,6 +39,7 @@ impl Highlight {
         match self {
             Self::Number => 31,
             Self::String => 35,
+            Self::Comment => 36,
             _ => 37,
         }
     }
@@ -47,12 +49,14 @@ impl Highlight {
 struct Syntax {
     filetype: &'static str,
     filematch: &'static [&'static str],
+    single_line_comment_start: Option<&'static str>,
     flags: u32,
 }
 
 const HLDB: [Syntax; 1] = [Syntax {
     filetype: "rust",
     filematch: &["rs"],
+    single_line_comment_start: Some("//"),
     flags: HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS,
 }];
 
@@ -133,6 +137,8 @@ fn update_syntax(syntax: Option<Syntax>, row: &mut Row) {
     let mut in_string = false;
     let flags = syntax.unwrap().flags;
 
+    let scs = syntax.unwrap().single_line_comment_start;
+
     let mut i = 0;
     while i < row.rsize {
         let c = row.render.chars().nth(i).unwrap();
@@ -141,6 +147,16 @@ fn update_syntax(syntax: Option<Syntax>, row: &mut Row) {
         } else {
             Highlight::Normal
         };
+
+        if scs.is_some() && !in_string {
+            let s = scs.unwrap();
+            if row.render[i..].starts_with(s) {
+                for j in i..row.rsize {
+                    row.hl[j] = Highlight::Comment;
+                }
+                break;
+            }
+        }
 
         if flags & HL_HIGHLIGHT_STRINGS != 0 {
             if in_string {
