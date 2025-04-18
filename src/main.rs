@@ -2,6 +2,7 @@ use std::{
     fmt::Write,
     fs::{File, OpenOptions},
     io::{stdout, BufRead, BufReader, Stdout, Write as _},
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -20,6 +21,7 @@ use crossterm::{
 const KILO_RS_VERSION: &str = "0.1.1";
 const KILO_RS_TAB_STOP: usize = 8;
 const KILO_RS_QUIT_TIMES: u8 = 3;
+const HL_HIGHLIGHT_NUMBERS: u32 = 1 << 0;
 
 type Callback = Box<dyn Fn(&mut EditorConfig, &str, KeyCode)>;
 
@@ -37,6 +39,19 @@ impl Highlight {
         }
     }
 }
+
+#[derive(Clone, Copy)]
+struct Syntax {
+    filetype: &'static str,
+    filematch: &'static [&'static str],
+    flags: u32,
+}
+
+const HLDB: [Syntax; 1] = [Syntax {
+    filetype: "rust",
+    filematch: &["rs"],
+    flags: HL_HIGHLIGHT_NUMBERS,
+}];
 
 struct Row {
     content: String,
@@ -59,6 +74,7 @@ struct EditorConfig {
     status_msg: String,
     status_msg_time: u64,
     dirty: bool,
+    syntax: Option<Syntax>,
 }
 
 impl EditorConfig {
@@ -78,6 +94,7 @@ impl EditorConfig {
             status_msg: String::new(),
             status_msg_time: 0,
             dirty: false,
+            syntax: None,
         })
     }
 }
@@ -102,8 +119,12 @@ fn is_separator(c: char) -> bool {
     c.is_ascii_punctuation() || c.is_ascii_whitespace() || c == '\0'
 }
 
-fn update_syntax(row: &mut Row) {
+fn update_syntax(syntax: Option<Syntax>, row: &mut Row) {
     row.hl.resize(row.rsize, Highlight::Normal);
+
+    if syntax.is_none() {
+        return;
+    }
 
     let mut prev_sep = true;
     let mut i = 0;
@@ -115,17 +136,40 @@ fn update_syntax(row: &mut Row) {
             Highlight::Normal
         };
 
-        if (c.is_ascii_digit() && (prev_sep || prev_hl == Highlight::Number))
-            || (c == '.' && prev_hl == Highlight::Number)
-        {
-            row.hl[i] = Highlight::Number;
-            i += 1;
-            prev_sep = false;
-            continue;
+        if syntax.unwrap().flags & HL_HIGHLIGHT_NUMBERS != 0 {
+            if (c.is_ascii_digit() && (prev_sep || prev_hl == Highlight::Number))
+                || (c == '.' && prev_hl == Highlight::Number)
+            {
+                row.hl[i] = Highlight::Number;
+                i += 1;
+                prev_sep = false;
+                continue;
+            }
         }
 
         prev_sep = is_separator(c);
         i += 1;
+    }
+}
+
+fn select_syntax_highlight(config: &mut EditorConfig) {
+    if config.filename.is_none() {
+        return;
+    }
+
+    if let Some(ext) = Path::new(config.filename.as_ref().unwrap().as_str()).extension() {
+        let ext = ext.to_str().unwrap();
+        for s in HLDB {
+            for fm in s.filematch {
+                if &ext == fm {
+                    config.syntax = Some(s);
+                    for row in config.row.iter_mut() {
+                        update_syntax(config.syntax, row);
+                    }
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -158,7 +202,7 @@ fn row_rx_to_cx(row: &Row, rx: usize) -> usize {
     ret_cx
 }
 
-fn update_row(row: &mut Row) {
+fn update_row(syntax: Option<Syntax>, row: &mut Row) {
     row.render.clear();
     let mut idx = 0;
     for c in row.content.chars() {
@@ -175,7 +219,7 @@ fn update_row(row: &mut Row) {
         }
     }
     row.rsize = idx;
-    update_syntax(row);
+    update_syntax(syntax, row);
 }
 
 fn insert_row(config: &mut EditorConfig, at: usize, s: &str) {
@@ -189,8 +233,7 @@ fn insert_row(config: &mut EditorConfig, at: usize, s: &str) {
         hl: Vec::new(),
     };
     config.row.insert(at, row);
-    update_row(&mut config.row[at]);
-    // config.row.push(row);
+    update_row(config.syntax, &mut config.row[at]);
     config.dirty = true;
 }
 
@@ -202,27 +245,27 @@ fn del_row(config: &mut EditorConfig, at: usize) {
     config.dirty = true;
 }
 
-fn row_insert_char(row: &mut Row, at: usize, c: char) {
+fn row_insert_char(syntax: Option<Syntax>, row: &mut Row, at: usize, c: char) {
     let at = if at > row.content.len() {
         row.content.len()
     } else {
         at
     };
     row.content.insert(at, c);
-    update_row(row);
+    update_row(syntax, row);
 }
 
-fn row_append_string(row: &mut Row, s: &str) {
+fn row_append_string(syntax: Option<Syntax>, row: &mut Row, s: &str) {
     row.content.push_str(s);
-    update_row(row);
+    update_row(syntax, row);
 }
 
-fn row_del_char(row: &mut Row, at: usize) {
+fn row_del_char(syntax: Option<Syntax>, row: &mut Row, at: usize) {
     if at >= row.content.len() {
         return;
     }
     row.content.remove(at);
-    update_row(row);
+    update_row(syntax, row);
 }
 
 // editor operations
@@ -231,7 +274,7 @@ fn insert_char(config: &mut EditorConfig, c: char) {
     if config.cy == config.row.len() {
         insert_row(config, config.row.len(), "");
     }
-    row_insert_char(&mut config.row[config.cy], config.cx, c);
+    row_insert_char(config.syntax, &mut config.row[config.cy], config.cx, c);
     config.cx += 1;
     config.dirty = true;
 }
@@ -243,7 +286,7 @@ fn insert_newline(config: &mut EditorConfig) {
         let content = config.row[config.cy].content.clone();
         insert_row(config, config.cy + 1, &content[config.cx..]);
         config.row[config.cy].content.truncate(config.cx);
-        update_row(&mut config.row[config.cy]);
+        update_row(config.syntax, &mut config.row[config.cy]);
     }
     config.cy += 1;
     config.cx = 0;
@@ -261,13 +304,13 @@ fn del_char(config: &mut EditorConfig) {
 
     if config.cx > 0 {
         let row = &mut config.row[config.cy];
-        row_del_char(row, config.cx - 1);
+        row_del_char(config.syntax, row, config.cx - 1);
         config.cx -= 1;
         config.dirty = true;
     } else {
         config.cx = config.row[config.cy - 1].content.len();
         let content = config.row[config.cy].content.clone();
-        row_append_string(&mut config.row[config.cy - 1], &content);
+        row_append_string(config.syntax, &mut config.row[config.cy - 1], &content);
         del_row(config, config.cy);
         config.cy -= 1;
         config.dirty = true;
@@ -285,6 +328,7 @@ fn rows_to_string(rows: &[Row]) -> String {
 
 fn open(config: &mut EditorConfig, filename: String) {
     config.filename = Some(filename.to_string());
+    select_syntax_highlight(config);
     let reader = BufReader::new(File::open(filename).unwrap_or_else(|err| die(err.into())));
     for line in reader.lines() {
         let line = line.unwrap_or_else(|err| die(err.into()));
@@ -294,30 +338,25 @@ fn open(config: &mut EditorConfig, filename: String) {
 }
 
 fn save(config: &mut EditorConfig) -> Result<()> {
-    let filename;
-    match &config.filename {
-        Some(name) => {
-            filename = name.clone();
-        }
-        None => {
-            let f = prompt(config, "Save as (ESC to cancel):", None)?;
-            if let Some(f) = f {
-                config.filename = Some(f.clone());
-                filename = f;
-            } else {
-                return set_status_msg(config, "Save aborted".to_string());
+    if config.filename.is_none() {
+        let f = prompt(config, "Save as (ESC to cancel):", None)?;
+        match f {
+            None => {
+                set_status_msg(config, "Save aborted".to_string())?;
+                return Ok(());
             }
+            Some(name) => config.filename = Some(name),
         }
     }
 
-    config.filename = Some(filename.clone());
+    select_syntax_highlight(config);
     let buf = rows_to_string(&config.row);
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(true)
-        .open(filename)
+        .open(config.filename.as_ref().unwrap())
         .unwrap_or_else(|err| die(err.into()));
     match file.write(buf.as_bytes()) {
         Ok(bytes) => {
@@ -326,7 +365,6 @@ fn save(config: &mut EditorConfig) -> Result<()> {
         }
         Err(e) => set_status_msg(config, format!("Can't save! I/O error: {}", e))?,
     };
-
     Ok(())
 }
 
@@ -499,7 +537,16 @@ fn draw_statusbar(config: &EditorConfig, buf: &mut String) {
         config.row.len(),
         if config.dirty { "(modified)" } else { "" }
     );
-    let rstatus = format!("{}/{}", config.cy + 1, config.row.len());
+    let rstatus = format!(
+        "{} | {}/{}",
+        if let Some(syntax) = &config.syntax {
+            syntax.filetype
+        } else {
+            "no ft"
+        },
+        config.cy + 1,
+        config.row.len()
+    );
     let mut len = status.len();
     if status.len() > config.screen_cols {
         len = config.screen_cols;
