@@ -32,6 +32,8 @@ enum Highlight {
     Number,
     String,
     Comment,
+    Keyword1,
+    Keyword2,
 }
 
 impl Highlight {
@@ -40,6 +42,8 @@ impl Highlight {
             Self::Number => 31,
             Self::String => 35,
             Self::Comment => 36,
+            Self::Keyword1 => 33,
+            Self::Keyword2 => 32,
             _ => 37,
         }
     }
@@ -49,6 +53,7 @@ impl Highlight {
 struct Syntax {
     filetype: &'static str,
     filematch: &'static [&'static str],
+    keywords: &'static [&'static str],
     single_line_comment_start: Option<&'static str>,
     flags: u32,
 }
@@ -56,6 +61,14 @@ struct Syntax {
 const HLDB: [Syntax; 1] = [Syntax {
     filetype: "rust",
     filematch: &["rs"],
+    keywords: &[
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+        "extern", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
+        "pub", "ref", "return", "self", "static", "struct", "trait", "type", "unsafe", "use",
+        "Vec", "Option", "vec", "where", "while", "i8|", "i16|", "i32|", "i64|", "i128|", "isize|",
+        "u8|", "u16|", "u32|", "u64|", "u128|", "usize|", "f32|", "f64|", "char|", "bool|",
+        "&str|", "str|", "()|", "String|",
+    ],
     single_line_comment_start: Some("//"),
     flags: HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS,
 }];
@@ -123,7 +136,7 @@ fn die(err: Error) -> ! {
 // Syntax highlighting
 
 fn is_separator(c: char) -> bool {
-    c.is_ascii_punctuation() || c.is_ascii_whitespace() || c == '\0'
+    c.is_whitespace() || c == '\0' || ",.()+-/*=~%<>[];".contains(c)
 }
 
 fn update_syntax(syntax: Option<Syntax>, row: &mut Row) {
@@ -138,6 +151,7 @@ fn update_syntax(syntax: Option<Syntax>, row: &mut Row) {
     let flags = syntax.unwrap().flags;
 
     let scs = syntax.unwrap().single_line_comment_start;
+    let keywords = syntax.unwrap().keywords;
 
     let mut i = 0;
     while i < row.rsize {
@@ -190,6 +204,38 @@ fn update_syntax(syntax: Option<Syntax>, row: &mut Row) {
             {
                 row.hl[i] = Highlight::Number;
                 i += 1;
+                prev_sep = false;
+                continue;
+            }
+        }
+
+        if prev_sep {
+            let mut is_break = false;
+            for kw in keywords {
+                let kw2 = kw.ends_with('|');
+                let (kw, klen) = if kw2 {
+                    (&kw.trim_end_matches("|"), kw.len() - 1)
+                } else {
+                    (kw, kw.len())
+                };
+
+                if row.render[i..].starts_with(kw)
+                    && is_separator(row.render.chars().nth(i + klen).unwrap())
+                {
+                    let hl = if kw2 {
+                        Highlight::Keyword2
+                    } else {
+                        Highlight::Keyword1
+                    };
+                    for j in i..i + klen {
+                        row.hl[j] = hl;
+                    }
+                    i += klen;
+                    is_break = true;
+                    break;
+                }
+            }
+            if is_break {
                 prev_sep = false;
                 continue;
             }
