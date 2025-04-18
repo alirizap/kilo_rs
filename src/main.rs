@@ -22,6 +22,7 @@ const KILO_RS_VERSION: &str = "0.1.1";
 const KILO_RS_TAB_STOP: usize = 8;
 const KILO_RS_QUIT_TIMES: u8 = 3;
 const HL_HIGHLIGHT_NUMBERS: u32 = 1 << 0;
+const HL_HIGHLIGHT_STRINGS: u32 = 1 << 1;
 
 type Callback = Box<dyn Fn(&mut EditorConfig, &str, KeyCode)>;
 
@@ -29,12 +30,14 @@ type Callback = Box<dyn Fn(&mut EditorConfig, &str, KeyCode)>;
 enum Highlight {
     Normal,
     Number,
+    String,
 }
 
 impl Highlight {
     fn to_color(self) -> u8 {
         match self {
             Self::Number => 31,
+            Self::String => 35,
             _ => 37,
         }
     }
@@ -50,7 +53,7 @@ struct Syntax {
 const HLDB: [Syntax; 1] = [Syntax {
     filetype: "rust",
     filematch: &["rs"],
-    flags: HL_HIGHLIGHT_NUMBERS,
+    flags: HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS,
 }];
 
 struct Row {
@@ -127,6 +130,9 @@ fn update_syntax(syntax: Option<Syntax>, row: &mut Row) {
     }
 
     let mut prev_sep = true;
+    let mut in_string = false;
+    let flags = syntax.unwrap().flags;
+
     let mut i = 0;
     while i < row.rsize {
         let c = row.render.chars().nth(i).unwrap();
@@ -136,7 +142,33 @@ fn update_syntax(syntax: Option<Syntax>, row: &mut Row) {
             Highlight::Normal
         };
 
-        if syntax.unwrap().flags & HL_HIGHLIGHT_NUMBERS != 0 {
+        if flags & HL_HIGHLIGHT_STRINGS != 0 {
+            if in_string {
+                row.hl[i] = Highlight::String;
+
+                if c == '\\' && i + 1 < row.rsize {
+                    row.hl[i + 1] = Highlight::String;
+                    i += 2;
+                    continue;
+                }
+
+                if c == '"' {
+                    in_string = false;
+                }
+                i += 1;
+                prev_sep = true;
+                continue;
+            } else {
+                if c == '"' {
+                    in_string = true;
+                    row.hl[i] = Highlight::String;
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+
+        if flags & HL_HIGHLIGHT_NUMBERS != 0 {
             if (c.is_ascii_digit() && (prev_sep || prev_hl == Highlight::Number))
                 || (c == '.' && prev_hl == Highlight::Number)
             {
